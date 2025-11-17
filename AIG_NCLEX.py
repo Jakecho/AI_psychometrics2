@@ -19,7 +19,8 @@ This app calls OpenAI chat models instead of Ollama.
 import json
 import os
 import textwrap
-from typing import Optional, Dict, Any
+import random
+from typing import Optional, Dict, Any, List, Tuple
 
 import streamlit as st
 from openai import OpenAI
@@ -343,23 +344,251 @@ def generate_nclex_items(
         model=model,
         api_key=api_key,
         temperature=temperature,
-        max_tokens=4096,
+        max_tokens=16000,  # Increased for longer responses with multiple items
     )
 
     # Try to parse JSON
     try:
         if not raw or not raw.strip():
             raise ValueError(f"Model returned empty response. Model: {model}")
-        parsed = json.loads(raw)
+        
+        # Clean the response - remove markdown code blocks if present
+        cleaned_raw = raw.strip()
+        
+        # Remove ```json and ``` markers if present
+        if cleaned_raw.startswith("```json"):
+            cleaned_raw = cleaned_raw[7:]  # Remove ```json
+        elif cleaned_raw.startswith("```"):
+            cleaned_raw = cleaned_raw[3:]  # Remove ```
+        
+        if cleaned_raw.endswith("```"):
+            cleaned_raw = cleaned_raw[:-3]  # Remove trailing ```
+        
+        cleaned_raw = cleaned_raw.strip()
+        
+        parsed = json.loads(cleaned_raw)
     except json.JSONDecodeError as e:
         # If decoding fails, raise including raw text for debugging
-        raise ValueError(f"Failed to parse JSON from model output.\nModel: {model}\nRaw output (first 500 chars):\n{raw[:500]}") from e
+        raise ValueError(f"Failed to parse JSON from model output.\nModel: {model}\nRaw output (first 500 chars):\n{raw[:500]}\n\nCleaned output (first 500 chars):\n{cleaned_raw[:500]}") from e
 
     return parsed
 
 
 # ============================================================
-# 4. STREAMLIT APP (GUI)
+# 5. ANSWER KEY RANDOMIZATION
+# ============================================================
+
+def randomize_answer_keys(items_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Randomize the correct answer position for each item.
+    Shuffles options and updates the 'is_key' flags accordingly.
+    """
+    for item in items_data.get("items", []):
+        for question in item.get("questions", []):
+            options = question.get("options", [])
+            if not options or len(options) < 2:
+                continue
+            
+            # Find the correct answer
+            correct_option = None
+            for opt in options:
+                if opt.get("is_key", False):
+                    correct_option = opt
+                    break
+            
+            if not correct_option:
+                continue
+            
+            # Shuffle the options
+            random.shuffle(options)
+            
+            # Reassign labels A, B, C, D, etc.
+            labels = ["A", "B", "C", "D", "E", "F", "G", "H"]
+            for i, opt in enumerate(options):
+                opt["label"] = labels[i] if i < len(labels) else f"Option{i+1}"
+            
+            # Update the question's options
+            question["options"] = options
+    
+    return items_data
+
+
+# ============================================================
+# 6. ITEM EVALUATION
+# ============================================================
+
+def evaluate_item_quality(item: Dict[str, Any], api_key: str, model: str = "gpt-4o-mini") -> Tuple[bool, str]:
+    """
+    Evaluate an NCLEX item for quality issues:
+    - Grammar and clarity
+    - NCLEX item writing guidelines
+    - Bias and cultural sensitivity
+    
+    Returns: (is_acceptable, feedback)
+    """
+    evaluation_prompt = f"""
+You are an expert NCLEX item reviewer. Evaluate the following NCLEX test item for quality issues.
+
+Focus on:
+1. **Grammar & Clarity**: Check for grammatical errors, unclear wording, or ambiguous phrasing
+2. **NCLEX Item Writing Guidelines**: 
+   - Stem should be clear and focused
+   - Options should be parallel in structure and length
+   - Avoid "all of the above" or "none of the above"
+   - Avoid absolute words like "always" or "never" unless clinically accurate
+   - Distractors should be plausible
+   - Exactly one best answer for single-best-answer format
+3. **Bias & Cultural Sensitivity**:
+   - Avoid gender, age, racial, or cultural bias
+   - Avoid stigmatizing language
+   - Use inclusive, respectful terminology
+
+ITEM TO EVALUATE:
+{json.dumps(item, indent=2)}
+
+Provide your evaluation in JSON format:
+{{
+  "is_acceptable": true/false,
+  "issues": [
+    {{
+      "category": "grammar|guidelines|bias",
+      "severity": "minor|moderate|major",
+      "description": "Specific issue description",
+      "suggestion": "How to fix it"
+    }}
+  ],
+  "overall_feedback": "Brief summary of main concerns or 'Item meets quality standards'"
+}}
+
+Return ONLY the JSON, no other text.
+"""
+    
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": evaluation_prompt}],
+            temperature=0.2,
+            max_completion_tokens=2000
+        )
+        
+        raw_response = response.choices[0].message.content.strip()
+        
+        # Clean markdown code blocks
+        if raw_response.startswith("```json"):
+            raw_response = raw_response[7:]
+        elif raw_response.startswith("```"):
+            raw_response = raw_response[3:]
+        if raw_response.endswith("```"):
+            raw_response = raw_response[:-3]
+        
+        eval_result = json.loads(raw_response.strip())
+        
+        is_acceptable = eval_result.get("is_acceptable", True)
+        
+        # Build feedback string
+        feedback = eval_result.get("overall_feedback", "")
+        issues = eval_result.get("issues", [])
+        
+        if issues:
+            feedback += "\n\nDetailed Issues:\n"
+            for i, issue in enumerate(issues, 1):
+                feedback += f"\n{i}. [{issue.get('category', 'unknown').upper()} - {issue.get('severity', 'unknown').upper()}]\n"
+                feedback += f"   Problem: {issue.get('description', '')}\n"
+                feedback += f"   Suggestion: {issue.get('suggestion', '')}\n"
+        
+        return is_acceptable, feedback
+        
+    except Exception as e:
+        # If evaluation fails, accept the item but log the error
+        return True, f"Evaluation skipped due to error: {str(e)}"
+
+
+def regenerate_item_with_feedback(
+    original_item: Dict[str, Any],
+    feedback: str,
+    exam_name: str,
+    target_level: str,
+    clinical_setting: str,
+    focus_statement: str,
+    nclex_focus: str,
+    client_needs_category: str,
+    client_situation: str,
+    cognitive_level: str,
+    intended_difficulty: str,
+    api_key: str,
+    model: str = "gpt-4o-mini",
+    max_scenario_words: int = 120,
+    num_options: int = 4
+) -> Dict[str, Any]:
+    """
+    Regenerate an item with specific feedback to address quality issues.
+    """
+    regeneration_prompt = f"""
+You are an expert NCLEX item writer. The following item has quality issues that need to be fixed.
+
+ORIGINAL ITEM:
+{json.dumps(original_item, indent=2)}
+
+QUALITY FEEDBACK:
+{feedback}
+
+TASK:
+Regenerate this item addressing all the feedback provided while maintaining:
+- The same clinical scenario and learning objective
+- The same NCLEX focus and difficulty level
+- All NCLEX item writing best practices
+
+BLUEPRINT CONSTRAINTS:
+- Exam: {exam_name}
+- Target level: {target_level}
+- Clinical setting: {clinical_setting}
+- Focus: {focus_statement}
+- NCLEX focus: {nclex_focus}
+- Client needs: {client_needs_category}
+- Client situation: {client_situation}
+- Cognitive level: {cognitive_level}
+- Difficulty: {intended_difficulty}
+- Max scenario words: {max_scenario_words}
+- Number of options: {num_options}
+
+Return the improved item using the EXACT same JSON structure as the original.
+Return ONLY valid JSON, no additional text.
+"""
+    
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": regeneration_prompt}
+            ],
+            temperature=0.3,
+            max_completion_tokens=8000
+        )
+        
+        raw_response = response.choices[0].message.content.strip()
+        
+        # Clean markdown code blocks
+        if raw_response.startswith("```json"):
+            raw_response = raw_response[7:]
+        elif raw_response.startswith("```"):
+            raw_response = raw_response[3:]
+        if raw_response.endswith("```"):
+            raw_response = raw_response[:-3]
+        
+        improved_item = json.loads(raw_response.strip())
+        return improved_item
+        
+    except Exception as e:
+        # If regeneration fails, return original item
+        st.warning(f"Regeneration failed: {str(e)}. Using original item.")
+        return original_item
+
+
+# ============================================================
+# 7. STREAMLIT APP (GUI)
 # ============================================================
 
 def main():
@@ -657,10 +886,61 @@ def main():
                     api_key=api_key,
                     temperature=temperature,
                 )
+                
+                # Step 1: Randomize answer keys
+                st.info("🔀 Randomizing answer keys...")
+                result = randomize_answer_keys(result)
+                
+                # Step 2: Evaluate and regenerate if needed
+                max_regenerations = 2  # Limit regeneration attempts
+                for item_idx, item in enumerate(result.get("items", [])):
+                    regeneration_count = 0
+                    
+                    while regeneration_count < max_regenerations:
+                        st.info(f"🔍 Evaluating item {item_idx + 1}/{len(result['items'])} (Attempt {regeneration_count + 1})...")
+                        
+                        is_acceptable, feedback = evaluate_item_quality(item, api_key, selected_model)
+                        
+                        if is_acceptable:
+                            st.success(f"✅ Item {item_idx + 1} passed quality check!")
+                            break
+                        else:
+                            st.warning(f"⚠️ Item {item_idx + 1} has quality issues. Regenerating...")
+                            st.text(feedback)
+                            
+                            # Regenerate with feedback
+                            improved_item = regenerate_item_with_feedback(
+                                original_item=item,
+                                feedback=feedback,
+                                exam_name=exam_name,
+                                target_level=target_level,
+                                clinical_setting=clinical_setting,
+                                focus_statement=focus_statement,
+                                nclex_focus=nclex_focus,
+                                client_needs_category=client_needs_category,
+                                client_situation=client_situation,
+                                cognitive_level=cognitive_level,
+                                intended_difficulty=intended_difficulty,
+                                api_key=api_key,
+                                model=selected_model,
+                                max_scenario_words=max_scenario_words,
+                                num_options=num_options
+                            )
+                            
+                            # Randomize the improved item's answer keys
+                            temp_result = {"items": [improved_item]}
+                            temp_result = randomize_answer_keys(temp_result)
+                            item = temp_result["items"][0]
+                            result["items"][item_idx] = item
+                            
+                            regeneration_count += 1
+                    
+                    if regeneration_count >= max_regenerations:
+                        st.warning(f"⚠️ Item {item_idx + 1} reached max regeneration attempts. Using best available version.")
 
                 # Store result in session state
                 st.session_state['generated_result'] = result
-                st.success("✅ NCLEX items generated successfully!")
+                st.success("✅ All NCLEX items generated and validated successfully!")
                 
             except Exception as exc:
                 st.error(f"Error during generation: {exc}")

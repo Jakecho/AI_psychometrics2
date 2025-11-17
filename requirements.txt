@@ -1,2 +1,6 @@
 streamlit
 openai
+psycopg2-binary
+sentence-transformers
+pandas
+numpy
