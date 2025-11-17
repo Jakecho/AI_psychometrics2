@@ -41,3 +41,22 @@ wheels/
 # OS
 .DS_Store
 Thumbs.db
+
+# Conference/presentation files
+*.pptx
+*.pdf
+*.docx
+*.zip
+
+# Jupyter notebooks (except pgvector.ipynb)
+AIG.ipynb
+COTS2025.ipynb
+vector_space.ipynb
+
+# Data files (optional - keep CSV in repo for now)
+*.xlsx
+
+# Images
+*.png
+*.jpg
+*.jpeg
