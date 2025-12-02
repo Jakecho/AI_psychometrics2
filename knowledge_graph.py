@@ -16,6 +16,7 @@ import umap
 import networkx as nx
 from scipy.spatial.distance import cosine
 import json
+import os
 
 # ==================== Configuration ====================
 DB_CONFIG = {
@@ -33,6 +34,8 @@ EMBEDDING_DIM = 384
 @st.cache_data
 def load_embeddings_from_db():
     """Load all embeddings and metadata from PostgreSQL database"""
+    # Try loading from Database
+    results = None
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
@@ -51,53 +54,79 @@ def load_embeddings_from_db():
         
         cursor.close()
         conn.close()
+        st.toast("Loaded data from Database", icon="🗄️")
         
-        # Parse results
-        ids = []
-        items = []
-        embeddings = []
-        
-        for row in results:
-            (item_id, domain, topic, stem, choice_a, choice_b, choice_c, choice_d, 
-             key, rationale, rasch_b, pvalue, point_biserial, embedding_str) = row
-            
-            ids.append(item_id)
-            
-            # Build item data dictionary
-            item_data = {
-                'item_id': item_id,
-                'item_stem': stem,
-                'content_category': domain if domain else topic,
-                'topic': topic,
-                'domain': domain,
-                'difficulty_level': 'Hard' if rasch_b and rasch_b > 0.5 else 'Medium' if rasch_b and rasch_b > -0.5 else 'Easy',
-                'choices': {
-                    'A': choice_a,
-                    'B': choice_b,
-                    'C': choice_c,
-                    'D': choice_d
-                },
-                'key': key,
-                'rationale': rationale,
-                'rasch_b': rasch_b,
-                'pvalue': pvalue,
-                'point_biserial': point_biserial
-            }
-            items.append(item_data)
-            
-            # Parse embedding (stored as string representation of array)
-            embedding = np.array(json.loads(embedding_str))
-            embeddings.append(embedding)
-        
-        embeddings_array = np.array(embeddings)
-        
-        st.success(f"✅ Loaded {len(ids)} items with {EMBEDDING_DIM}-dimensional embeddings")
-        
-        return ids, items, embeddings_array
-    
     except Exception as e:
-        st.error(f"❌ Failed to load embeddings: {str(e)}")
+        # Fallback to CSV
+        csv_path = "item_bank_hosted.csv"
+        if os.path.exists(csv_path):
+            st.warning(f"⚠️ Database connection failed. Falling back to {csv_path}")
+            try:
+                df = pd.read_csv(csv_path)
+                # Ensure columns match the SQL query order
+                cols = ["item_id", "domain", "topic", "stem", "choice_A", "choice_B", 
+                        "choice_C", "choice_D", "key", "rationale", "rasch_b", "pvalue", 
+                        "point_biserial", "embedding"]
+                # Fill NaNs with None to match psycopg2 behavior
+                df = df.where(pd.notnull(df), None)
+                results = df[cols].values.tolist()
+            except Exception as csv_e:
+                st.error(f"❌ Failed to load CSV fallback: {csv_e}")
+                return [], [], np.array([])
+        else:
+            st.error(f"❌ Database failed and no CSV found: {str(e)}")
+            return [], [], np.array([])
+
+    if not results:
         return [], [], np.array([])
+
+    # Parse results
+    ids = []
+    items = []
+    embeddings = []
+    
+    for row in results:
+        (item_id, domain, topic, stem, choice_a, choice_b, choice_c, choice_d, 
+            key, rationale, rasch_b, pvalue, point_biserial, embedding_str) = row
+        
+        ids.append(item_id)
+        
+        # Build item data dictionary
+        item_data = {
+            'item_id': item_id,
+            'item_stem': stem,
+            'content_category': domain if domain else topic,
+            'topic': topic,
+            'domain': domain,
+            'difficulty_level': 'Hard' if rasch_b and rasch_b > 0.5 else 'Medium' if rasch_b and rasch_b > -0.5 else 'Easy',
+            'choices': {
+                'A': choice_a,
+                'B': choice_b,
+                'C': choice_c,
+                'D': choice_d
+            },
+            'key': key,
+            'rationale': rationale,
+            'rasch_b': rasch_b,
+            'pvalue': pvalue,
+            'point_biserial': point_biserial
+        }
+        items.append(item_data)
+        
+        # Parse embedding
+        if isinstance(embedding_str, str):
+            embedding = np.array(json.loads(embedding_str))
+        else:
+            # Handle case where it might already be a list/array (unlikely from CSV but possible)
+            embedding = np.array(embedding_str)
+            
+        embeddings.append(embedding)
+    
+    embeddings_array = np.array(embeddings)
+    
+    st.success(f"✅ Loaded {len(ids)} items with {EMBEDDING_DIM}-dimensional embeddings")
+    
+    return ids, items, embeddings_array
 
 @st.cache_data
 def reduce_dimensions(embeddings, method='tsne', n_components=3, perplexity=30, max_iter=1000, n_neighbors=15, min_dist=0.1):
