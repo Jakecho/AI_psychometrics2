@@ -250,7 +250,7 @@ def assemble_form_with_cbc(
             prob += avg_pval >= target - tolerance
             prob += avg_pval <= target + tolerance
     
-    # 8. TIF constraints (IRT only)
+    # 9. TIF constraints (IRT only)
     if approach == 'IRT' and config.get('eval_points') and config.get('tif_tolerance'):
         eval_points = config['eval_points']
         tif_tol = config['tif_tolerance'].get('tif', 1.5)
@@ -285,7 +285,7 @@ def assemble_form_with_cbc(
         prob += tif_high >= tif_target_high - tif_tol
         prob += tif_high <= tif_target_high + tif_tol
     
-    # 9. Enemy item constraints
+    # 10. Enemy item constraints
     if config.get('enemy_check', False):
         # Build enemy pairs from 'enemy' column if it exists
         enemy_pairs = []
@@ -788,6 +788,44 @@ def main():
             'tcc_high': tcc_high
         }
     
+    # CTT Constraints
+    mean_difficulty_target = None
+    difficulty_tolerance = None
+    pvalue_min = 0.0
+    pvalue_max = 1.0
+    discrimination_min = 0.0
+    
+    if approach == 'CTT':
+        st.sidebar.subheader("📊 CTT Constraints")
+        
+        # Mean difficulty target
+        st.sidebar.markdown("**Mean Difficulty (P-value):**")
+        mean_difficulty_target = st.sidebar.number_input(
+            "Target Mean P-value",
+            0.0, 1.0, 0.6, 0.05,
+            help="Target average difficulty (p-value) for the test"
+        )
+        difficulty_tolerance = st.sidebar.number_input(
+            "Tolerance (±)",
+            0.01, 0.5, 0.1, 0.01,
+            help="Acceptable deviation from target mean p-value"
+        )
+        
+        # P-value range
+        st.sidebar.markdown("**P-value Range:**")
+        pval_col1, pval_col2 = st.sidebar.columns(2)
+        with pval_col1:
+            pvalue_min = st.number_input("Min P-value", 0.0, 1.0, 0.3, 0.05)
+        with pval_col2:
+            pvalue_max = st.number_input("Max P-value", 0.0, 1.0, 0.9, 0.05)
+        
+        # Discrimination threshold
+        discrimination_min = st.sidebar.number_input(
+            "Min Discrimination",
+            0.0, 1.0, 0.2, 0.05,
+            help="Minimum point-biserial correlation"
+        )
+    
     # Assemble button
     st.sidebar.divider()
     if st.sidebar.button("🚀 Assemble Form", type="primary", use_container_width=True):
@@ -799,9 +837,11 @@ def main():
             'maximize_alpha': maximize_alpha,
             'eval_points': eval_points,
             'tif_tolerance': {'tif': tif_tolerance, 'tcc': tcc_tolerance} if tif_tolerance else None,
-            'pvalue_min': 0.0,
-            'pvalue_max': 1.0,
-            'pbs_threshold': 0.0,
+            'pvalue_min': pvalue_min,
+            'pvalue_max': pvalue_max,
+            'pbs_threshold': discrimination_min,
+            'mean_difficulty_target': mean_difficulty_target,
+            'difficulty_tolerance': difficulty_tolerance,
             'excluded_items': excluded_items,
             'common_items': common_items,
             'enemy_check': enemy_check
