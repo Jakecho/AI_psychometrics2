@@ -350,6 +350,7 @@ def assemble_form_with_cbc(
 def evaluate_form(items_df: pd.DataFrame, config: Dict[str, Any]) -> Dict[str, Any]:
     """Evaluate assembled form quality"""
     
+    approach = config.get('approach', 'IRT')
     b_params = items_df['rasch_b'].values
     
     # Calculate TIF and TCC across theta range
@@ -357,13 +358,20 @@ def evaluate_form(items_df: pd.DataFrame, config: Dict[str, Any]) -> Dict[str, A
     tif_values = [calculate_tif(theta, b_params) for theta in theta_range]
     tcc_values = [calculate_tcc(theta, b_params) for theta in theta_range]
     
-    # Basic statistics
+    # Basic statistics - use appropriate difficulty metric
+    if approach == 'CTT':
+        mean_difficulty = items_df['pvalue'].mean()
+        sd_difficulty = items_df['pvalue'].std()
+    else:  # IRT
+        mean_difficulty = items_df['rasch_b'].mean()
+        sd_difficulty = items_df['rasch_b'].std()
+    
     stats = {
         'theta_range': theta_range,
         'tif_values': tif_values,
         'tcc_values': tcc_values,
-        'mean_difficulty': items_df['rasch_b'].mean(),
-        'sd_difficulty': items_df['rasch_b'].std(),
+        'mean_difficulty': mean_difficulty,
+        'sd_difficulty': sd_difficulty,
         'mean_discrimination': items_df['point_biserial'].mean(),
         'domain_counts': items_df['domain'].value_counts().to_dict()
     }
