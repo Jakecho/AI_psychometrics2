@@ -772,9 +772,9 @@ def main():
         st.sidebar.markdown("**Tolerances:**")
         tol_col1, tol_col2 = st.sidebar.columns(2)
         with tol_col1:
-            tif_tolerance = st.number_input("TIF Tolerance (±)", 0.1, 10.0, 1.5, 0.1)
+            tif_tolerance = st.number_input("TIF Tolerance (±)", 0.1, 10.0, 0.2, 0.1)
         with tol_col2:
-            tcc_tolerance = st.number_input("TCC Tolerance (±)", 0.1, 20.0, 2.0, 0.5)
+            tcc_tolerance = st.number_input("TCC Tolerance (±)", 0.1, 20.0, 1.0, 0.5)
         
         eval_points = {
             'theta_low': evaluation_points[0],
