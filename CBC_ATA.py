@@ -835,14 +835,14 @@ def main():
         st.sidebar.markdown("**P-value Range:**")
         pval_col1, pval_col2 = st.sidebar.columns(2)
         with pval_col1:
-            pvalue_min = st.number_input("Min P-value", 0.0, 1.0, 0.3, 0.05)
+            pvalue_min = st.number_input("Min P-value", 0.0, 1.0, 0.25, 0.05)
         with pval_col2:
-            pvalue_max = st.number_input("Max P-value", 0.0, 1.0, 0.9, 0.05)
+            pvalue_max = st.number_input("Max P-value", 0.0, 1.0, 0.95, 0.05)
         
         # Discrimination threshold
         discrimination_min = st.sidebar.number_input(
             "Min Discrimination",
-            0.0, 1.0, 0.2, 0.05,
+            0.0, 1.0, 0.15, 0.05,
             help="Minimum point-biserial correlation"
         )
     
