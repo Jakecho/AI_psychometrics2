@@ -242,65 +242,293 @@ def evaluate_form_quality(items_df: pd.DataFrame, theta_range: np.ndarray,
         'meets_all_constraints': meets_all_constraints
     }
 
+# ==================== Heuristic Pre-Filtering ====================
+
+def heuristic_prefilter(
+    available_items: pd.DataFrame,
+    selected_items: List[int],
+    domain_constraints: Dict[str, int],
+    form_specs: Dict[str, Any],
+    top_k: int = 50
+) -> pd.DataFrame:
+    """
+    Pre-filter items using heuristics to reduce pool size for LLM
+    
+    Reduces token usage by selecting only the most promising candidates
+    based on difficulty, discrimination, and domain needs.
+    
+    Args:
+        available_items: Full item pool
+        selected_items: Already selected item IDs (to exclude)
+        domain_constraints: Required items per domain
+        form_specs: Form specifications (difficulty targets, etc.)
+        top_k: Number of top candidates to return
+    
+    Returns:
+        DataFrame of top K candidate items
+    """
+    # Remove already selected items
+    candidates = available_items[~available_items['item_id'].isin(selected_items)].copy()
+    
+    # Apply hard constraints from form_specs
+    if 'pvalue_min' in form_specs and 'pvalue_max' in form_specs:
+        candidates = candidates[
+            (candidates['pvalue'] >= form_specs['pvalue_min']) &
+            (candidates['pvalue'] <= form_specs['pvalue_max'])
+        ]
+    
+    if 'pbs_threshold' in form_specs and form_specs['pbs_threshold'] is not None:
+        candidates = candidates[candidates['point_biserial'] > form_specs['pbs_threshold']]
+    
+    if 'excluded_items' in form_specs and form_specs['excluded_items']:
+        candidates = candidates[~candidates['item_id'].isin(form_specs['excluded_items'])]
+    
+    # Calculate domain needs
+    domain_needs = {}
+    for domain, target_count in domain_constraints.items():
+        already_selected_count = len([
+            iid for iid in selected_items 
+            if iid in available_items[available_items['domain'] == domain]['item_id'].values
+        ])
+        domain_needs[domain] = max(0, target_count - already_selected_count)
+    
+    # Score candidates based on approach
+    approach = form_specs.get('approach', 'IRT')
+    
+    if approach == 'IRT':
+        target_difficulty = form_specs.get('mean_diff_target', 0.0)
+        
+        # Difficulty score: closer to target is better
+        candidates['diff_score'] = 1 / (1 + abs(candidates['rasch_b'] - target_difficulty))
+        
+        # Discrimination score
+        candidates['disc_score'] = candidates['point_biserial']
+        
+        # Domain need score: prioritize needed domains
+        total_domain_need = max(1, sum(domain_needs.values()))
+        candidates['domain_score'] = candidates['domain'].map(
+            lambda d: domain_needs.get(d, 0) / total_domain_need
+        )
+        
+        # Combined score (weighted)
+        candidates['heuristic_score'] = (
+            0.4 * candidates['diff_score'] +
+            0.3 * candidates['disc_score'] +
+            0.3 * candidates['domain_score']
+        )
+    else:
+        # CTT scoring
+        target_pvalue = form_specs.get('mean_diff_target', 0.65)
+        
+        candidates['diff_score'] = 1 / (1 + abs(candidates['pvalue'] - target_pvalue))
+        candidates['disc_score'] = candidates['point_biserial']
+        total_domain_need = max(1, sum(domain_needs.values()))
+        candidates['domain_score'] = candidates['domain'].map(
+            lambda d: domain_needs.get(d, 0) / total_domain_need
+        )
+        
+        candidates['heuristic_score'] = (
+            0.4 * candidates['diff_score'] +
+            0.3 * candidates['disc_score'] +
+            0.3 * candidates['domain_score']
+        )
+    
+    # Select top K candidates
+    top_candidates = candidates.nlargest(min(top_k, len(candidates)), 'heuristic_score')
+    
+    return top_candidates
+
 # ==================== AI Assembly Functions ====================
 
-def build_form_with_ai(agent: ItemPoolAgent, form_specs: Dict[str, Any], 
-                       available_items: pd.DataFrame, used_items: set,
-                       common_items: List[int] = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def select_items_with_llm(
+    candidates: pd.DataFrame,
+    items_needed: int,
+    domain_constraints: Dict[str, int],
+    already_selected: List[int],
+    form_specs: Dict[str, Any]
+) -> Dict[str, Any]:
     """
-    Use GPT-4o to build a test form meeting specifications including difficulty constraints
+    Use LLM to select optimal items from pre-filtered candidates
+    
+    Args:
+        candidates: Pre-filtered candidate items (top-K from heuristic)
+        items_needed: Number of items to select
+        domain_constraints: Required count per domain
+        already_selected: Items already in the form
+        form_specs: Form specifications
+    
+    Returns:
+        Dict with selected_item_ids and reasoning
+    """
+    # Calculate remaining domain needs
+    domain_needs = {}
+    for domain, target in domain_constraints.items():
+        already_count = sum(1 for iid in already_selected 
+                          if iid in candidates[candidates['domain'] == domain]['item_id'].values)
+        domain_needs[domain] = max(0, target - already_count)
+    
+    # Prepare candidate summary for LLM (compact representation)
+    candidate_summary = candidates[['item_id', 'domain', 'rasch_b', 'pvalue', 'point_biserial']].to_dict('records')
+    
+    # Build prompt
+    approach = form_specs.get('approach', 'IRT')
+    
+    prompt = f"""You are an expert psychometrician assembling a test form.
+
+**Task:** Select exactly {items_needed} items from the {len(candidates)} candidates below.
+
+**Approach:** {approach}
+
+**Domain Requirements (remaining needed):**
+{json.dumps(domain_needs, indent=2)}
+
+**Constraints:**
+- {'Rasch b (difficulty):' if approach == 'IRT' else 'P-value:'} Target = {form_specs.get('mean_diff_target', 0.0 if approach == 'IRT' else 0.65)}
+- Point-biserial (discrimination): Higher is better
+- Must meet domain counts EXACTLY
+
+**Available Candidates:**
+{json.dumps(candidate_summary[:min(50, len(candidate_summary))], indent=2)}
+
+**Instructions:**
+1. Select items to meet domain requirements
+2. Prefer items with {'b closer to target' if approach == 'IRT' else 'p-value closer to target'}
+3. Prioritize higher discrimination (point_biserial)
+4. Ensure good content distribution within domains
+
+Return your selection as JSON:
+{{
+  "selected_item_ids": [list of {items_needed} item IDs],
+  "reasoning": "brief explanation of selection strategy"
+}}
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are an expert psychometrician specializing in test assembly."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        
+        # Validate selection
+        selected_ids = result.get('selected_item_ids', [])
+        if len(selected_ids) != items_needed:
+            raise ValueError(f"LLM returned {len(selected_ids)} items, expected {items_needed}")
+        
+        # Ensure all IDs are valid
+        valid_ids = set(candidates['item_id'].values)
+        selected_ids = [iid for iid in selected_ids if iid in valid_ids]
+        
+        return {
+            'selected_item_ids': selected_ids,
+            'reasoning': result.get('reasoning', 'No reasoning provided'),
+            'llm_used': True
+        }
+        
+    except Exception as e:
+        # Fallback to heuristic if LLM fails
+        st.warning(f"⚠️ LLM selection failed ({e}), falling back to heuristic selection")
+        
+        # Simple heuristic fallback: take top N by heuristic score
+        fallback_selection = candidates.nlargest(items_needed, 'heuristic_score')
+        
+        return {
+            'selected_item_ids': fallback_selection['item_id'].tolist(),
+            'reasoning': 'Heuristic fallback due to LLM error',
+            'llm_used': False
+        }
+
+    """
+    Build a test form using hybrid LLM + heuristic approach
+    
+    Two-stage process:
+    1. Heuristic pre-filtering: reduce pool to top-K candidates
+    2. LLM selection: intelligently select from top candidates
     """
     
-    # Filter out already used items
-    candidate_items = available_items[~available_items['item_id'].isin(used_items)].copy()
-    
-    # If common items specified, include them
+    # Initialize selected items
     selected_items = []
     if common_items:
-        common_df = available_items[available_items['item_id'].isin(common_items)]
         selected_items = common_items.copy()
-        remaining_needed = form_specs['test_length'] - len(common_items)
-        candidate_items = candidate_items[~candidate_items['item_id'].isin(common_items)]
-    else:
-        remaining_needed = form_specs['test_length']
     
-    # Prepare domain constraints
+    # Calculate items still needed
+    test_length = form_specs.get('test_length', 50)
+    remaining_needed = test_length - len(selected_items)
+    
+    # Get domain constraints
     domain_constraints = form_specs.get('domain_counts', {})
     
-    # Group candidates by domain
-    domain_groups = {}
-    for domain in domain_constraints.keys():
-        domain_items = candidate_items[candidate_items['domain'] == domain]
-        domain_groups[domain] = domain_items['item_id'].tolist()
+    # Stage 1: Heuristic Pre-Filtering
+    top_k = form_specs.get('top_k', 50)  # Number of candidates to send to LLM
     
-    # Build prompt for GPT-4o
-    prompt = f"""You are an expert psychometrician building a test form.
+    candidates = heuristic_prefilter(
+        available_items=available_items,
+        selected_items=list(used_items) + selected_items,
+        domain_constraints=domain_constraints,
+        form_specs=form_specs,
+        top_k=top_k
+    )
+    
+    if len(candidates) == 0:
+        raise ValueError("No candidates available after pre-filtering")
+    
+    # Stage 2: LLM Selection (or heuristic fallback)
+    use_llm = form_specs.get('use_llm', True)
+    
+    if use_llm:
+        # Use LLM for intelligent selection
+        llm_result = select_items_with_llm(
+            candidates=candidates,
+            items_needed=remaining_needed,
+            domain_constraints=domain_constraints,
+            already_selected=selected_items,
+            form_specs=form_specs
+        )
+        
+        new_item_ids = llm_result['selected_item_ids']
+        reasoning = llm_result['reasoning']
+        llm_used = llm_result['llm_used']
+    else:
+        # Pure heuristic fallback
+        top_items = candidates.nlargest(remaining_needed, 'heuristic_score')
+        new_item_ids = top_items['item_id'].tolist()
+        reasoning = "Heuristic selection (LLM disabled)"
+        llm_used = False
+    
+    # Combine common items + new selections
+    all_selected_ids = selected_items + new_item_ids
+    
+    # Get the full item data
+    form_df = available_items[available_items['item_id'].isin(all_selected_ids)].copy()
+    
+    # Evaluate form quality
+    theta_range = np.linspace(-3, 3, 61)
+    
+    # Get evaluation points if specified
+    eval_points = form_specs.get('evaluation_points')
+    tolerance = form_specs.get('tolerance', 0.1)
+    
+    quality = evaluate_form_quality(
+        form_df,
+        theta_range,
+        eval_points,
+        tolerance
+    )
+    
+    # Add metadata
+    quality['llm_used'] = llm_used
+    quality['reasoning'] = reasoning
+    quality['n_candidates_evaluated'] = len(candidates)
+    
+    return form_df, quality
 
-Test Specifications:
-- Test Length: {form_specs['test_length']} items
-- Target TIF at theta=0: {form_specs.get('target_tif', 10)}
-- Tolerance: {form_specs.get('tolerance', 0.1) * 100}%
-
-Domain Requirements:
-{json.dumps(domain_constraints, indent=2)}
-
-Available Items by Domain:
-{json.dumps({k: len(v) for k, v in domain_groups.items()}, indent=2)}
-
-Common Items Already Selected: {len(selected_items)}
-Remaining Items Needed: {remaining_needed}
-
-Task: Select {remaining_needed} item IDs (one per domain as specified) that will:
-1. Meet domain distribution requirements
-2. Provide balanced difficulty (target avg Rasch b ≈ 0)
-3. Maximize test information around theta = 0
-4. Avoid highly similar items (enemy items)
-
-Return ONLY a JSON object with format:
-{{
-  "selected_item_ids": [list of item IDs],
-  "reasoning": "brief explanation"
-}}
+# ==================== Visualization Functions ====================
 """
 
     # For now, use heuristic selection (GPT-4o can be added for optimization)

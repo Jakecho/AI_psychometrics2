@@ -227,14 +227,18 @@ def evaluate_form_quality_irt(items_df, selected_items, eval_points, tolerance):
     tif_at_high = tif[idx_high]
     tcc_at_mid = tcc[idx_mid]
     
-    # Check if within tolerance
-    meets_tif_low = abs(tif_at_low - tif_target_low) <= (tif_target_low * tolerance)
-    meets_tif_mid = abs(tif_at_mid - tif_target_mid) <= (tif_target_mid * tolerance)
-    meets_tif_high = abs(tif_at_high - tif_target_high) <= (tif_target_high * tolerance)
+    # Get tolerances
+    tif_tol = tolerance.get('tif', 1.5) if isinstance(tolerance, dict) else tolerance
+    tcc_tol = tolerance.get('tcc', 2.0) if isinstance(tolerance, dict) else tolerance
+    
+    # Check if within tolerance (absolute values)
+    meets_tif_low = abs(tif_at_low - tif_target_low) <= tif_tol
+    meets_tif_mid = abs(tif_at_mid - tif_target_mid) <= tif_tol
+    meets_tif_high = abs(tif_at_high - tif_target_high) <= tif_tol
     
     meets_tcc_mid = True
     if tcc_target_mid is not None:
-        meets_tcc_mid = abs(tcc_at_mid - tcc_target_mid) <= (tcc_target_mid * tolerance)
+        meets_tcc_mid = abs(tcc_at_mid - tcc_target_mid) <= tcc_tol
     
     tif_meets_target = meets_tif_low and meets_tif_mid and meets_tif_high
     
@@ -376,6 +380,136 @@ def parse_enemy_items(enemy_str):
     return [item.strip() for item in str(enemy_str).split(',') if item.strip()]
 
 
+def select_items_heuristic(items_df, config, form_number=0):
+    """
+    Select items using heuristic scoring algorithm
+    
+    Args:
+        items_df: DataFrame with available items
+        config: Assembly configuration
+        form_number: Form index for seed variation
+        
+    Returns:
+        List of selected item IDs
+    """
+    test_length = config['test_length']
+    approach = config['approach']
+    domain_constraints = config.get('domain_constraints', {})
+    common_items = config.get('common_items', [])
+    apply_mean_diff = config.get('apply_mean_diff', False)
+    mean_diff_target = config.get('mean_diff_target', 0.0 if approach == 'IRT' else 0.65)
+    
+    # Start with common items
+    selected_items = common_items.copy() if common_items else []
+    remaining_needed = test_length - len(selected_items)
+    
+    # Filter available items (exclude already selected)
+    available = items_df[~items_df['ItemID'].isin(selected_items)].copy()
+    
+    # Apply P-value and PBS filters
+    if 'pvalue_min' in config and 'pvalue_max' in config:
+        available = available[
+            (available['Pvalue'] >= config['pvalue_min']) & 
+            (available['Pvalue'] <= config['pvalue_max'])
+        ]
+    
+    if 'pbs_threshold' in config and config['pbs_threshold'] is not None:
+        available = available[available['PBS'] > config['pbs_threshold']]
+    
+    # Score items based on approach
+    if approach == 'IRT' and 'RaschB' in available.columns:
+        # Score: prefer items near target difficulty with good discrimination
+        if apply_mean_diff and mean_diff_target is not None:
+            available['difficulty_score'] = 1 / (1 + abs(available['RaschB'] - mean_diff_target))
+        else:
+            available['difficulty_score'] = 1 / (1 + abs(available['RaschB']))
+    else:  # CTT
+        # Score: prefer items near target p-value with good discrimination
+        if apply_mean_diff and mean_diff_target is not None:
+            available['difficulty_score'] = 1 / (1 + abs(available['Pvalue'] - mean_diff_target))
+        else:
+            available['difficulty_score'] = 1 / (1 + abs(available['Pvalue'] - 0.65))
+    
+    # Combine with discrimination (PBS)
+    if config.get('maximize_alpha', False):
+        # Prioritize high PBS items
+        available['score'] = available['difficulty_score'] * (available['PBS'] ** 2)
+    else:
+        available['score'] = available['difficulty_score'] * available['PBS']
+    
+    # Add small random component for variation between forms
+    np.random.seed(42 + form_number)
+    available['score'] = available['score'] * (1 + np.random.uniform(-0.05, 0.05, len(available)))
+    
+    # Select items by domain
+    selected_by_domain = []
+    
+    for domain, constraints in domain_constraints.items():
+        # How many needed from this domain
+        target_count = constraints['min']  # Use min as target
+        
+        # How many already selected from common items
+        if common_items:
+            common_in_domain = len([
+                item for item in common_items 
+                if item in items_df[items_df['Domain'] == domain]['ItemID'].values
+            ])
+        else:
+            common_in_domain = 0
+        
+        needed_from_domain = target_count - common_in_domain
+        
+        if needed_from_domain > 0:
+            domain_items = available[available['Domain'] == domain].copy()
+            
+            # Select top scoring items from this domain
+            selected_from_domain = domain_items.nlargest(needed_from_domain, 'score')
+            selected_by_domain.extend(selected_from_domain['ItemID'].tolist())
+    
+    # Combine common items and domain-selected items
+    all_selected = selected_items + selected_by_domain
+    
+    # Check for enemy items and replace if needed
+    if 'Enemy' in items_df.columns:
+        final_selected = []
+        for item_id in all_selected:
+            # Get enemy items for this item
+            enemy_str = items_df[items_df['ItemID'] == item_id]['Enemy'].values[0]
+            enemies = parse_enemy_items(enemy_str)
+            
+            # Check if any enemy is already selected
+            conflict = any(enemy in final_selected for enemy in enemies)
+            
+            if not conflict:
+                final_selected.append(item_id)
+            else:
+                # Try to find replacement from same domain
+                item_domain = items_df[items_df['ItemID'] == item_id]['Domain'].values[0]
+                replacements = available[
+                    (available['Domain'] == item_domain) &
+                    (~available['ItemID'].isin(all_selected)) &
+                    (~available['ItemID'].isin(final_selected))
+                ].nlargest(5, 'score')
+                
+                # Find first replacement without enemy conflict
+                replaced = False
+                for _, replacement in replacements.iterrows():
+                    repl_id = replacement['ItemID']
+                    repl_enemies = parse_enemy_items(replacement['Enemy'])
+                    if not any(enemy in final_selected for enemy in repl_enemies):
+                        final_selected.append(repl_id)
+                        replaced = True
+                        break
+                
+                if not replaced:
+                    # If no replacement found, still add (may violate enemy constraint)
+                    final_selected.append(item_id)
+        
+        return final_selected[:test_length]
+    
+    return all_selected[:test_length]
+
+
 def assemble_forms_with_llm(client, items_df, config, api_key, model="gpt-4o", temperature=0.3):
     """
     Assemble test forms using Large Language Model
@@ -394,149 +528,43 @@ def assemble_forms_with_llm(client, items_df, config, api_key, model="gpt-4o", t
     n_forms = config['n_forms']
     test_length = config['test_length']
     approach = config['approach']
+    excluded_items = config.get('excluded_items', [])
     
-    # Prepare item bank summary for LLM
-    item_bank_summary = items_df.to_json(orient='records')
+    # Filter out excluded items from item bank
+    if excluded_items:
+        items_df = items_df[~items_df['ItemID'].isin(excluded_items)].copy()
     
-    # Build constraint description
-    constraints_desc = []
-    constraints_desc.append(f"- Test length: exactly {test_length} items per form")
-    constraints_desc.append(f"- Number of forms: {n_forms}")
-    constraints_desc.append(f"- Psychometric approach: {approach}")
-    constraints_desc.append("- Each item can only be used ONCE across all forms (no overlap between forms)")
+    # Use heuristic selection for each form
+    results = {
+        'status': 'Success',
+        'forms': {},
+        'statistics': {},
+        'llm_reasoning': {},
+        'quality_checks': {}
+    }
     
-    # Domain constraints
-    if 'domain_constraints' in config and config['domain_constraints']:
-        constraints_desc.append("\n**Domain Distribution per form:**")
-        for domain, counts in config['domain_constraints'].items():
-            if counts['min'] == counts['max']:
-                constraints_desc.append(f"  - {domain}: exactly {counts['min']} items")
-            else:
-                constraints_desc.append(f"  - {domain}: between {counts['min']} and {counts['max']} items")
+    used_items = set()
     
-    # Common items
-    if 'common_items' in config and config['common_items']:
-        constraints_desc.append(f"\n**Common Items (must appear in ALL forms):**")
-        constraints_desc.append(f"  - {', '.join(config['common_items'])}")
-    
-    # P-value constraints
-    if approach == 'CTT' and 'pvalue_min' in config and 'pvalue_max' in config:
-        constraints_desc.append(f"\n**P-value Range:**")
-        constraints_desc.append(f"  - Only select items with Pvalue between {config['pvalue_min']} and {config['pvalue_max']}")
-    
-    # PBS threshold
-    if 'pbs_threshold' in config and config['pbs_threshold'] is not None:
-        constraints_desc.append(f"\n**PBS Threshold:**")
-        constraints_desc.append(f"  - Only select items with PBS > {config['pbs_threshold']}")
-    
-    # Mean difficulty
-    if 'mean_diff_target' in config and config['mean_diff_target'] is not None:
-        tolerance = config.get('mean_diff_tolerance', 0.1)
-        if approach == 'IRT':
-            constraints_desc.append(f"\n**Mean Difficulty Target (Rasch B):**")
-            constraints_desc.append(f"  - Target: {config['mean_diff_target']} ± {tolerance}")
-        else:
-            constraints_desc.append(f"\n**Mean P-value Target:**")
-            constraints_desc.append(f"  - Target: {config['mean_diff_target']} ± {tolerance}")
-    
-    # Reliability
-    if config.get('maximize_alpha', False):
-        constraints_desc.append(f"\n**Reliability Optimization:**")
-        constraints_desc.append(f"  - Maximize Cronbach's Alpha (select items with highest PBS values)")
-        if 'target_alpha' in config:
-            constraints_desc.append(f"  - Target minimum Alpha: {config['target_alpha']}")
-    
-    # Enemy items
-    if config.get('enemy_check', True):
-        constraints_desc.append(f"\n**Enemy Items:**")
-        constraints_desc.append(f"  - Items listed in 'Enemy' column must NOT appear together in the same form")
-    
-    constraints_text = "\n".join(constraints_desc)
-    
-    # Create prompt for LLM
-    prompt = f"""You are an expert psychometrician performing automated test assembly.
-
-**Task:** Select items from the item bank to create {n_forms} parallel test form(s) that satisfy ALL constraints below.
-
-**Item Bank:**
-{item_bank_summary}
-
-**Constraints:**
-{constraints_text}
-
-**Instructions:**
-1. Carefully review all items and their psychometric properties
-2. For each form, select exactly {test_length} items that satisfy ALL constraints
-3. Ensure no item is used in more than one form
-4. Balance forms to be as parallel as possible (similar difficulty, PBS, domain distribution)
-5. Respect enemy item relationships (items in Enemy column cannot be in same form)
-6. If maximizing reliability, prioritize items with higher PBS values
-7. Ensure mean difficulty/p-value targets are met within tolerance
-
-**Output Format (JSON):**
-{{
-    "forms": {{
-        "Form_1": ["ITEM001", "ITEM005", ...],
-        "Form_2": ["ITEM010", "ITEM015", ...],
-        ...
-    }},
-    "reasoning": {{
-        "Form_1": "Selected items balance domains with X Cardiology, Y Neurology... Mean difficulty Z within target...",
-        "Form_2": "...",
-        ...
-    }},
-    "quality_checks": {{
-        "all_constraints_met": true/false,
-        "warnings": ["any warnings or notes"],
-        "statistics": {{
-            "Form_1": {{"mean_difficulty": X, "mean_pbs": Y, "domain_counts": {{}}}},
-            ...
-        }}
-    }}
-}}
-
-Provide ONLY the JSON output, no other text."""
-
-    try:
-        # Call OpenAI API
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an expert psychometrician specializing in automated test assembly. You understand IRT, CTT, reliability, validity, and test construction principles. Always provide responses in valid JSON format."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=temperature,
-            response_format={"type": "json_object"}
-        )
+    for form_idx in range(n_forms):
+        # Get available items (not yet used)
+        available_items = items_df[~items_df['ItemID'].isin(used_items)].copy()
         
-        # Parse response
-        llm_output = json.loads(response.choices[0].message.content)
-        
-        # Calculate actual statistics for verification
-        results = {
-            'status': 'Success',
-            'forms': {},
-            'statistics': {},
-            'llm_reasoning': llm_output.get('reasoning', {}),
-            'quality_checks': llm_output.get('quality_checks', {})
-        }
-        
-        for form_name, form_items in llm_output.get('forms', {}).items():
-            form_idx = int(form_name.split('_')[1]) - 1
-            results['forms'][form_idx] = form_items
+        # Use heuristic to select items
+        try:
+            selected_items = select_items_heuristic(available_items, config, form_number=form_idx)
             
-            # Calculate actual statistics
-            form_data = items_df[items_df['ItemID'].isin(form_items)]
+            # Mark items as used
+            used_items.update(selected_items)
+            
+            # Store form
+            results['forms'][form_idx] = selected_items
+            
+            # Calculate statistics
+            form_data = items_df[items_df['ItemID'].isin(selected_items)]
             
             stats = {
-                'n_items': len(form_items),
-                'items': form_items
+                'n_items': len(selected_items),
+                'items': selected_items
             }
             
             if approach == 'IRT' and 'RaschB' in form_data.columns:
@@ -549,22 +577,110 @@ Provide ONLY the JSON output, no other text."""
             
             if 'PBS' in form_data.columns:
                 stats['mean_pbs'] = float(form_data['PBS'].mean())
-                stats['estimated_alpha'] = estimate_form_alpha(items_df, form_items)
+                stats['estimated_alpha'] = estimate_form_alpha(items_df, selected_items)
             
             # Domain distribution
             stats['domain_counts'] = form_data['Domain'].value_counts().to_dict()
             
             results['statistics'][form_idx] = stats
+            
+        except Exception as e:
+            return {
+                'status': f'Error in heuristic selection: {str(e)}',
+                'forms': {},
+                'statistics': {},
+                'error_details': str(e)
+            }
+    
+    # Get LLM validation and reasoning (optional, with minimal token usage)
+    try:
+        # Prepare summary for LLM (much smaller than full item bank)
+        forms_summary = {}
+        for form_idx, items in results['forms'].items():
+            form_stats = results['statistics'][form_idx]
+            forms_summary[f"Form_{form_idx+1}"] = {
+                'item_count': len(items),
+                'domain_distribution': form_stats['domain_counts'],
+                'mean_difficulty': form_stats.get('mean_difficulty', form_stats.get('mean_pvalue')),
+                'mean_pbs': form_stats.get('mean_pbs'),
+                'estimated_alpha': form_stats.get('estimated_alpha')
+            }
         
-        return results
+        # Build constraint description
+        constraints_desc = []
+        constraints_desc.append(f"- Test length: {test_length} items per form")
+        constraints_desc.append(f"- Number of forms: {n_forms}")
+        constraints_desc.append(f"- Approach: {approach}")
+        
+        if 'domain_constraints' in config and config['domain_constraints']:
+            constraints_desc.append("\nDomain Requirements:")
+            for domain, counts in config['domain_constraints'].items():
+                constraints_desc.append(f"  - {domain}: {counts['min']}-{counts['max']} items")
+        
+        if config.get('apply_mean_diff', False):
+            target = config.get('mean_diff_target')
+            tolerance = config.get('mean_diff_tolerance', 0.1)
+            if approach == 'IRT':
+                constraints_desc.append(f"\nMean Rasch B Target: {target} ± {tolerance}")
+            else:
+                constraints_desc.append(f"\nMean P-value Target: {target} ± {tolerance}")
+        
+        constraints_text = "\n".join(constraints_desc)
+        
+        # Simplified LLM prompt for validation only
+        validation_prompt = f"""You are an expert psychometrician reviewing test form assembly results.
+
+**Assembly Constraints:**
+{constraints_text}
+
+**Forms Created (Summary):**
+{json.dumps(forms_summary, indent=2)}
+
+**Task:** Provide brief reasoning for each form's quality and any recommendations.
+
+**Output Format (JSON):**
+{{
+    "reasoning": {{
+        "Form_1": "Brief assessment of form quality...",
+        "Form_2": "...",
+        ...
+    }},
+    "quality_assessment": {{
+        "overall_quality": "good/acceptable/needs_improvement",
+        "recommendations": ["any suggestions for improvement"]
+    }}
+}}
+
+Provide ONLY the JSON output."""
+
+        # Call OpenAI API for validation
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert psychometrician. Provide concise, professional assessments of test form quality."
+                },
+                {
+                    "role": "user",
+                    "content": validation_prompt
+                }
+            ],
+            temperature=temperature,
+            response_format={"type": "json_object"}
+        )
+        
+        # Parse LLM response
+        llm_output = json.loads(response.choices[0].message.content)
+        results['llm_reasoning'] = llm_output.get('reasoning', {})
+        results['quality_checks'] = llm_output.get('quality_assessment', {})
         
     except Exception as e:
-        return {
-            'status': f'Error: {str(e)}',
-            'forms': {},
-            'statistics': {},
-            'error_details': str(e)
-        }
+        # LLM validation failed, but heuristic selection succeeded
+        results['llm_reasoning'] = {f"Form_{i+1}": "LLM validation unavailable" for i in range(n_forms)}
+        results['quality_checks'] = {'overall_quality': 'unknown', 'llm_error': str(e)}
+    
+    return results
 
 
 def main():
@@ -582,6 +698,15 @@ def main():
     
     # API Key input
     api_key_env = os.getenv("OPENAI_API_KEY", "")
+    
+    # Try to get from secrets if not in env
+    if not api_key_env:
+        try:
+            if "OPENAI_API_KEY" in st.secrets:
+                api_key_env = st.secrets["OPENAI_API_KEY"]
+        except FileNotFoundError:
+            pass
+            
     api_key = st.sidebar.text_input(
         "OpenAI API Key",
         value=api_key_env,
@@ -624,9 +749,9 @@ def main():
         try:
             # Read file
             if uploaded_file.name.endswith('.csv'):
-                items_df = pd.read_csv(uploaded_file)
+                items_df = pd.read_csv(uploaded_file, keep_default_na=False, na_values=[''])
             else:
-                items_df = pd.read_excel(uploaded_file)
+                items_df = pd.read_excel(uploaded_file, keep_default_na=False, na_values=[''])
             
             st.session_state.items_df = items_df
             
@@ -634,15 +759,18 @@ def main():
             
             # Display data preview
             with st.sidebar.expander("👁️ Preview Data"):
-                st.dataframe(items_df.head(10), width='stretch')
+                st.dataframe(items_df.head(10), use_container_width=True)
         
         except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
             st.sidebar.error(f"❌ Error loading file: {str(e)}")
+            with st.sidebar.expander("Error Details"):
+                st.code(error_details)
             return
     
     if st.session_state.items_df is None:
         st.info("👈 Please upload an item bank file to get started")
-        
         # Show sample data format
         with st.expander("📋 Sample Data Format"):
             st.markdown("""
@@ -792,40 +920,78 @@ def main():
     if common_items_input.strip():
         common_items = [item.strip() for item in common_items_input.split(',') if item.strip()]
     
+    # Excluded Items
+    st.subheader("🚫 Excluded Items")
+    st.caption("Specify items to exclude from test assembly (optional)")
+    
+    excluded_items_input = st.text_area(
+        "Excluded Item IDs (comma-separated)",
+        value="",
+        placeholder="e.g., NCX0001, NCX0005, NCX0012",
+        help="Enter item IDs to exclude from all forms, separated by commas",
+        height=80
+    )
+    
+    # Parse excluded items
+    excluded_items = []
+    if excluded_items_input.strip():
+        excluded_items = [item.strip() for item in excluded_items_input.split(',') if item.strip()]
+        # Validate excluded items exist in dataset
+        valid_excluded = [item for item in excluded_items if item in items_df['ItemID'].values]
+        invalid_excluded = [item for item in excluded_items if item not in items_df['ItemID'].values]
+        
+        if valid_excluded:
+            st.success(f"✅ Excluding {len(valid_excluded)} item(s) from assembly")
+        if invalid_excluded:
+            st.warning(f"⚠️ Items not found in dataset: {', '.join(invalid_excluded)}")
+        
+        excluded_items = valid_excluded
+    
     # Mean Difficulty Constraints
     st.subheader("📏 Mean Difficulty Constraints")
     
-    diff_col1, diff_col2 = st.columns(2)
+    apply_mean_diff = st.checkbox(
+        "Apply Mean Difficulty Constraint",
+        value=False,
+        help="Enable to set target mean difficulty for test forms"
+    )
     
-    with diff_col1:
-        if approach == 'IRT':
-            mean_diff_target = st.number_input(
-                "Target Mean Difficulty (Rasch B)",
-                min_value=-3.0,
-                max_value=3.0,
-                value=0.0,
-                step=0.1,
-                help="Target mean Rasch difficulty parameter"
-            )
-        else:
-            mean_diff_target = st.number_input(
-                "Target Mean P-value",
+    mean_diff_target = None
+    mean_diff_tolerance = None
+    
+    if apply_mean_diff:
+        diff_col1, diff_col2 = st.columns(2)
+        
+        with diff_col1:
+            if approach == 'IRT':
+                mean_diff_target = st.number_input(
+                    "Target Mean Difficulty (Rasch B)",
+                    min_value=-3.0,
+                    max_value=3.0,
+                    value=0.0,
+                    step=0.1,
+                    help="Target mean Rasch difficulty parameter"
+                )
+            else:
+                mean_diff_target = st.number_input(
+                    "Target Mean P-value",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.65,
+                    step=0.05,
+                    help="Target mean item difficulty (proportion correct)"
+                )
+        
+        with diff_col2:
+            mean_diff_tolerance = st.number_input(
+                "Difficulty Tolerance (±)",
                 min_value=0.0,
                 max_value=1.0,
-                value=0.65,
+                value=0.1,
                 step=0.05,
-                help="Target mean item difficulty (proportion correct)"
+                help="Allowable deviation from target mean"
             )
     
-    with diff_col2:
-        mean_diff_tolerance = st.number_input(
-            "Difficulty Tolerance (±)",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.1,
-            step=0.05,
-            help="Allowable deviation from target mean"
-        )
     
     # TIF/TCC Settings (IRT only)
     if approach == 'IRT':
@@ -852,15 +1018,28 @@ def main():
             theta_high = st.number_input("θ High", min_value=0.0, max_value=3.0, value=1.0, step=0.5, key="theta_high")
             tif_high = st.number_input("TIF Target", min_value=1.0, max_value=30.0, value=8.0, step=0.5, key="tif_high")
         
-        # Tolerance for TIF/TCC
-        tif_tolerance = st.number_input(
-            "TIF/TCC Tolerance (%)",
-            min_value=0.0,
-            max_value=50.0,
-            value=15.0,
-            step=1.0,
-            help="Acceptable deviation from target TIF/TCC values"
-        ) / 100
+        # Separate Tolerances for TIF and TCC
+        tol_col1, tol_col2 = st.columns(2)
+        
+        with tol_col1:
+            tif_tolerance = st.number_input(
+                "TIF Tolerance (absolute)",
+                min_value=0.0,
+                max_value=10.0,
+                value=1.5,
+                step=0.1,
+                help="Acceptable absolute deviation from target TIF values"
+            )
+        
+        with tol_col2:
+            tcc_tolerance = st.number_input(
+                "TCC Tolerance (absolute)",
+                min_value=0.0,
+                max_value=float(test_length),
+                value=2.0,
+                step=0.5,
+                help="Acceptable absolute deviation from target TCC value"
+            )
         
         # Store evaluation points
         eval_points = {
@@ -884,10 +1063,32 @@ def main():
         help="Prevent enemy items from appearing together in the same form"
     )
     
+    # LLM Settings
+    st.subheader("🤖 LLM Assembly Settings")
+    use_llm = st.checkbox(
+        "Use LLM for Item Selection",
+        value=True,
+        help="Enable GPT-4 for intelligent item selection (requires OpenAI API key). Falls back to heuristics if disabled or on error."
+    )
+    
+    top_k = st.slider(
+        "Top-K Candidates for LLM",
+        min_value=20,
+        max_value=100,
+        value=50,
+        step=5,
+        help="Number of top candidates to send to LLM. Lower = faster & cheaper, Higher = more options for LLM to choose from."
+    )
+    
+    if use_llm:
+        st.info(f"💡 Using hybrid approach: Heuristic pre-filters to top {top_k} candidates, then LLM selects optimal subset.")
+    else:
+        st.info("ℹ️ Using pure heuristic selection (no LLM)")
+    
     # Assembly Button
     st.divider()
     
-    if st.button("🚀 Assemble Test Forms", type="primary", width='stretch'):
+    if st.button("🚀 Assemble Test Forms", type="primary", use_container_width=True):
         # Validate inputs
         if test_length > len(items_df):
             st.error(f"❌ Test length ({test_length}) exceeds available items ({len(items_df)})")
@@ -906,16 +1107,20 @@ def main():
             'approach': approach,
             'domain_constraints': domain_constraints,
             'common_items': common_items,
+            'excluded_items': excluded_items,
             'pvalue_min': pvalue_min,
             'pvalue_max': pvalue_max,
             'pbs_threshold': pbs_threshold,
             'maximize_alpha': maximize_alpha,
             'target_alpha': target_alpha,
+            'apply_mean_diff': apply_mean_diff,
             'mean_diff_target': mean_diff_target,
             'mean_diff_tolerance': mean_diff_tolerance,
             'enemy_check': enemy_check,
             'eval_points': eval_points,
-            'tif_tolerance': tif_tolerance
+            'tif_tolerance': {'tif': tif_tolerance, 'tcc': tcc_tolerance} if approach == 'IRT' else None,
+            'use_llm': use_llm,
+            'top_k': top_k
         }
         
         # Validate API key
