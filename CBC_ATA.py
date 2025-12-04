@@ -250,6 +250,18 @@ def assemble_form_with_cbc(
             prob += avg_pval >= target - tolerance
             prob += avg_pval <= target + tolerance
     
+    # 8. Mean difficulty constraint (CTT only)
+    if approach == 'CTT' and config.get('mean_difficulty_target') is not None and config.get('difficulty_tolerance') is not None:
+        target_mean = config['mean_difficulty_target']
+        tolerance = config['difficulty_tolerance']
+        
+        # Average p-value constraint
+        avg_pval = lpSum([items_df[items_df['item_id']==item_id]['pvalue'].values[0] * item_vars[item_id]
+                         for item_id in item_vars.keys()]) / test_length
+        
+        prob += avg_pval >= target_mean - tolerance
+        prob += avg_pval <= target_mean + tolerance
+    
     # 9. TIF constraints (IRT only)
     if approach == 'IRT' and config.get('eval_points') and config.get('tif_tolerance'):
         eval_points = config['eval_points']
