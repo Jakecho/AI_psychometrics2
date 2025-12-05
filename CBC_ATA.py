@@ -772,11 +772,11 @@ def main():
         st.sidebar.markdown("**TIF Targets:**")
         col1, col2, col3 = st.sidebar.columns(3)
         with col1:
-            tif_low = st.number_input(f"TIF @ {evaluation_points[0]:.1f}", 0.0, 50.0, 5.0, 0.5, key="tif_low")
+            tif_low = st.number_input(f"TIF @ {evaluation_points[0]:.1f}", 0.0, 50.0, 14.0, 0.5, key="tif_low")
         with col2:
-            tif_mid = st.number_input(f"TIF @ {evaluation_points[1]:.1f}", 0.0, 50.0, 10.0, 0.5, key="tif_mid")
+            tif_mid = st.number_input(f"TIF @ {evaluation_points[1]:.1f}", 0.0, 50.0, 18.0, 0.5, key="tif_mid")
         with col3:
-            tif_high = st.number_input(f"TIF @ {evaluation_points[2]:.1f}", 0.0, 50.0, 5.0, 0.5, key="tif_high")
+            tif_high = st.number_input(f"TIF @ {evaluation_points[2]:.1f}", 0.0, 50.0, 14.0, 0.5, key="tif_high")
         
         # TCC Targets
         st.sidebar.markdown("**TCC Targets (Expected Score):**")
