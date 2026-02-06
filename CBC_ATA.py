@@ -292,7 +292,7 @@ def assemble_form_with_cbc(
             prob += avg_b <= target + tolerance
     
     # 8. Mean difficulty constraint (CTT only)
-    if approach == 'CTT' and config.get('mean_difficulty_target') is not None and config.get('difficulty_tolerance') is not None:
+    if (use_ctt_mode or approach == 'CTT') and config.get('mean_difficulty_target') is not None and config.get('difficulty_tolerance') is not None:
         target_mean = config['mean_difficulty_target']
         tolerance = config['difficulty_tolerance']
         
@@ -867,24 +867,45 @@ def main():
     tif_tolerance = None
     tcc_tolerance = None
     logit_cut = 0.0
-    
+    mean_difficulty_target = None
+    difficulty_tolerance = None
+    pvalue_min = 0.0
+    pvalue_max = 1.0
+    discrimination_min = 0.0
+
+    # CTT Mode: Show mean difficulty constraints instead of logit cut
+    if use_ctt_mode:
+        st.sidebar.subheader("📊 Mean Difficulty Target")
+        st.sidebar.markdown("**Mean Difficulty (P-value):**")
+        mean_difficulty_target = st.sidebar.number_input(
+            "Target Mean P-value",
+            0.0, 1.0, 0.6, 0.05,
+            help="Target average difficulty (p-value) for the test",
+            key="ctt_mean_target"
+        )
+        difficulty_tolerance = st.sidebar.number_input(
+            "Tolerance (±)",
+            0.01, 0.5, 0.1, 0.01,
+            help="Acceptable deviation from target mean p-value",
+            key="ctt_tolerance"
+        )
     # Base Form Optimal Under Rasch
-    if approach == 'Base Form Optimal Under Rasch':
+    elif approach == 'Base Form Optimal Under Rasch':
         st.sidebar.subheader("📐 Logit Cut")
         logit_cut = st.sidebar.number_input(
-            "Logit Cut (θ)", 
+            "Logit Cut (θ)",
             -3.0, 3.0, 0.0, 0.1,
             help="Objective: Maximize test information at this θ value"
         )
         st.sidebar.info("🎯 Objective: Max test information at logit cut")
-        
+
         # Store in eval_points for consistency, including -1 and +1 points
         eval_points = {
             'theta_low': logit_cut - 1.0,
             'theta_mid': logit_cut,
             'theta_high': logit_cut + 1.0
         }
-    
+
     # IRT with full evaluation points
     elif approach == 'IRT':
         st.sidebar.subheader("📐 IRT Evaluation Points")
@@ -932,15 +953,9 @@ def main():
             'tcc_mid': tcc_mid,
             'tcc_high': tcc_high
         }
-    
-    # CTT Constraints
-    mean_difficulty_target = None
-    difficulty_tolerance = None
-    pvalue_min = 0.0
-    pvalue_max = 1.0
-    discrimination_min = 0.0
-    
-    if approach == 'CTT':
+
+    # CTT Approach (when not using CTT mode checkbox)
+    elif approach == 'CTT' and not use_ctt_mode:
         st.sidebar.subheader("📊 CTT Constraints")
         
         # Mean difficulty target
