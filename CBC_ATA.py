@@ -1,14 +1,15 @@
 """
 CBC_ATA - CBC Solver-Based Automated Test Assembly
 ====================================================
-
+Sample bank: item_bank_hosted2.csv
+Description:
 Uses Mixed Integer Programming with CBC (Coin-or Branch and Cut) solver
 for optimal test assembly. Works on Streamlit Community Cloud (free tier).
 
 Features:
 - Pure optimization approach (no LLM needed)
-- Handles IRT and CTT constraints
-- TIF/TCC targets with tolerances
+- Base Form Optimal Under Rasch: Max test information at logit cut
+- Handles IRT (full TIF/TCC) and CTT constraints
 - Domain distribution constraints
 - Free and fast
 
@@ -67,6 +68,7 @@ def load_item_pool(uploaded_file) -> pd.DataFrame:
         
         # Validate required columns
         required_cols = ['item_id', 'domain', 'rasch_b', 'pvalue', 'point_biserial']
+        optional_cols = ['raschb_cat', 'enemy_ids']
         missing_cols = [col for col in required_cols if col not in df.columns]
         
         if missing_cols:
@@ -74,6 +76,19 @@ def load_item_pool(uploaded_file) -> pd.DataFrame:
             st.info("Required columns: item_id, domain, rasch_b, pvalue, point_biserial")
             return None
         
+        # Normalize ID types for reliable matching
+        df['item_id'] = df['item_id'].astype(str)
+
+        # Fill missing categories for consistent grouping
+        df['domain'] = df['domain'].fillna('Unspecified')
+        if 'raschb_cat' in df.columns:
+            df['raschb_cat'] = df['raschb_cat'].fillna('Unspecified')
+
+        # Notify about optional columns
+        missing_optional = [col for col in optional_cols if col not in df.columns]
+        if missing_optional:
+            st.info(f"Optional columns not found: {missing_optional}. Those features will be disabled.")
+
         return df
     
     except Exception as e:
@@ -130,7 +145,7 @@ def estimate_cronbachs_alpha(items_df: pd.DataFrame) -> float:
 def assemble_form_with_cbc(
     items_df: pd.DataFrame,
     config: Dict[str, Any]
-) -> Tuple[List[int], Dict[str, Any]]:
+) -> Tuple[List[str], Dict[str, Any]]:
     """
     Assemble test form using CBC solver (Mixed Integer Programming)
     
@@ -144,7 +159,9 @@ def assemble_form_with_cbc(
     n_items = len(items_df)
     test_length = config['test_length']
     approach = config['approach']
+    use_ctt_mode = config.get('use_ctt_mode', False)
     domain_constraints = config['domain_constraints']
+    raschb_cat_constraints = config.get('raschb_cat_constraints', {})
     
     # Create the LP problem
     prob = LpProblem("Test_Assembly", LpMaximize)
@@ -156,8 +173,13 @@ def assemble_form_with_cbc(
         item_vars[item_id] = LpVariable(f"x_{item_id}", cat='Binary')
     
     # ===== OBJECTIVE FUNCTION =====
-    if approach == 'IRT' and config.get('eval_points'):
-        # Maximize information at cut score
+    if use_ctt_mode:
+        # CTT mode: Maximize reliability using discrimination (point-biserial)
+        # Ignore Rasch parameters, use CTT statistics only
+        prob += lpSum([items_df[items_df['item_id']==item_id]['point_biserial'].values[0] * item_vars[item_id]
+                      for item_id in item_vars.keys()])
+    elif (approach == 'Base Form Optimal Under Rasch' or approach == 'IRT') and config.get('eval_points'):
+        # Maximize information at cut score using Rasch model
         eval_points = config['eval_points']
         theta_mid = eval_points.get('theta_mid', 0.0)
         
@@ -171,11 +193,6 @@ def assemble_form_with_cbc(
         
         # Objective: maximize total information at cut score
         prob += lpSum([info_contributions[item_id] * item_vars[item_id] 
-                      for item_id in item_vars.keys()])
-    
-    elif config.get('maximize_alpha'):
-        # Maximize reliability (approximate with sum of discriminations)
-        prob += lpSum([items_df[items_df['item_id']==item_id]['point_biserial'].values[0] * item_vars[item_id]
                       for item_id in item_vars.keys()])
     else:
         # Default: maximize discrimination
@@ -202,6 +219,23 @@ def assemble_form_with_cbc(
         if max_count < test_length:
             prob += lpSum([item_vars[item_id] for item_id in domain_item_ids 
                           if item_id in item_vars]) <= max_count
+
+    # 2b. Rasch B category constraints
+    if raschb_cat_constraints and 'raschb_cat' in items_df.columns:
+        for category, constraints in raschb_cat_constraints.items():
+            category_items = items_df[items_df['raschb_cat'] == category]
+            category_item_ids = category_items['item_id'].tolist()
+
+            min_count = constraints['min']
+            max_count = constraints['max']
+
+            if min_count > 0:
+                prob += lpSum([item_vars[item_id] for item_id in category_item_ids
+                              if item_id in item_vars]) >= min_count
+
+            if max_count < test_length:
+                prob += lpSum([item_vars[item_id] for item_id in category_item_ids
+                              if item_id in item_vars]) <= max_count
     
     # 3. P-value constraints (CTT)
     if 'pvalue_min' in config and 'pvalue_max' in config:
@@ -235,7 +269,14 @@ def assemble_form_with_cbc(
         target = config['mean_diff_target']
         tolerance = config.get('mean_diff_tolerance', 0.1)
         
-        if approach == 'IRT':
+        if use_ctt_mode or approach == 'CTT':
+            # Mean P-value constraint (CTT)
+            avg_pval = lpSum([items_df[items_df['item_id']==item_id]['pvalue'].values[0] * item_vars[item_id]
+                             for item_id in item_vars.keys()]) / test_length
+            
+            prob += avg_pval >= target - tolerance
+            prob += avg_pval <= target + tolerance
+        elif approach == 'IRT':
             # Mean Rasch B constraint
             avg_b = lpSum([items_df[items_df['item_id']==item_id]['rasch_b'].values[0] * item_vars[item_id]
                           for item_id in item_vars.keys()]) / test_length
@@ -243,12 +284,12 @@ def assemble_form_with_cbc(
             prob += avg_b >= target - tolerance
             prob += avg_b <= target + tolerance
         else:
-            # Mean P-value constraint
-            avg_pval = lpSum([items_df[items_df['item_id']==item_id]['pvalue'].values[0] * item_vars[item_id]
-                             for item_id in item_vars.keys()]) / test_length
+            # Base Form: use Rasch B
+            avg_b = lpSum([items_df[items_df['item_id']==item_id]['rasch_b'].values[0] * item_vars[item_id]
+                          for item_id in item_vars.keys()]) / test_length
             
-            prob += avg_pval >= target - tolerance
-            prob += avg_pval <= target + tolerance
+            prob += avg_b >= target - tolerance
+            prob += avg_b <= target + tolerance
     
     # 8. Mean difficulty constraint (CTT only)
     if approach == 'CTT' and config.get('mean_difficulty_target') is not None and config.get('difficulty_tolerance') is not None:
@@ -262,8 +303,8 @@ def assemble_form_with_cbc(
         prob += avg_pval >= target_mean - tolerance
         prob += avg_pval <= target_mean + tolerance
     
-    # 9. TIF constraints (IRT only)
-    if approach == 'IRT' and config.get('eval_points') and config.get('tif_tolerance'):
+    # 9. TIF constraints (IRT only, not in CTT mode)
+    if not use_ctt_mode and approach == 'IRT' and config.get('eval_points') and config.get('tif_tolerance'):
         eval_points = config['eval_points']
         tif_tol = config['tif_tolerance'].get('tif', 1.5)
         
@@ -299,17 +340,23 @@ def assemble_form_with_cbc(
     
     # 10. Enemy item constraints
     if config.get('enemy_check', False):
-        # Build enemy pairs from 'enemy' column if it exists
+        # Build enemy pairs from 'enemy_ids' column if it exists
         enemy_pairs = []
-        if 'enemy' in items_df.columns:
+        enemy_col = None
+        if 'enemy_ids' in items_df.columns:
+            enemy_col = 'enemy_ids'
+        elif 'enemy' in items_df.columns:
+            enemy_col = 'enemy'
+
+        if enemy_col:
             for idx, row in items_df.iterrows():
                 item_id = row['item_id']
-                enemy_str = row.get('enemy', '')
+                enemy_str = row.get(enemy_col, '')
                 
                 if pd.notna(enemy_str) and str(enemy_str).strip():
                     # Parse comma-separated enemy IDs
                     try:
-                        enemy_ids = [int(x.strip()) for x in str(enemy_str).split(',') if x.strip()]
+                        enemy_ids = [x.strip() for x in str(enemy_str).split(',') if x.strip()]
                         for enemy_id in enemy_ids:
                             if enemy_id in item_vars and item_id in item_vars:
                                 # Ensure we don't add duplicate pairs
@@ -362,7 +409,7 @@ def evaluate_form(items_df: pd.DataFrame, config: Dict[str, Any]) -> Dict[str, A
     if approach == 'CTT':
         mean_difficulty = items_df['pvalue'].mean()
         sd_difficulty = items_df['pvalue'].std()
-    else:  # IRT
+    else:  # IRT or Base Form (both use Rasch)
         mean_difficulty = items_df['rasch_b'].mean()
         sd_difficulty = items_df['rasch_b'].std()
     
@@ -375,6 +422,9 @@ def evaluate_form(items_df: pd.DataFrame, config: Dict[str, Any]) -> Dict[str, A
         'mean_discrimination': items_df['point_biserial'].mean(),
         'domain_counts': items_df['domain'].value_counts().to_dict()
     }
+
+    if 'raschb_cat' in items_df.columns:
+        stats['raschb_cat_counts'] = items_df['raschb_cat'].value_counts().to_dict()
     
     # Evaluation at specific points if provided
     if config.get('eval_points'):
@@ -464,7 +514,7 @@ def plot_tif_tcc(stats: Dict[str, Any], config: Dict[str, Any]) -> Tuple[go.Figu
 
 # ==================== Display Functions ====================
 
-def display_form_results(form_data: Dict[str, Any], eval_points: Dict, common_items: List[int], approach: str, enemy_check: bool = False):
+def display_form_results(form_data: Dict[str, Any], eval_points: Dict, common_items: List[str], approach: str, enemy_check: bool = False, use_ctt_mode: bool = False):
     """Display results for a single form"""
     selected_df = form_data['selected_df']
     stats = form_data['stats']
@@ -491,36 +541,47 @@ def display_form_results(form_data: Dict[str, Any], eval_points: Dict, common_it
         'Count': list(stats['domain_counts'].values())
     })
     st.dataframe(domain_df, use_container_width=True, hide_index=True)
+
+    if stats.get('raschb_cat_counts'):
+        st.subheader("🏷️ Rasch B Category Distribution")
+        raschb_df = pd.DataFrame({
+            'Rasch B Category': list(stats['raschb_cat_counts'].keys()),
+            'Count': list(stats['raschb_cat_counts'].values())
+        })
+        st.dataframe(raschb_df, use_container_width=True, hide_index=True)
     
-    # Summary table
+    # Summary metrics and table
     st.subheader("📋 Summary")
-    summary_data = {
-        'Metric': [
-            'Test Length',
-            'Cronbach Alpha',
-            'Mean P-value',
-            'Mean Discrimination',
-            'Mean Rasch B',
-            'SD Rasch B',
-            'Enemy Check'
-        ],
-        'Value': [
-            len(selected_df),
-            f"{alpha:.3f}",
-            f"{selected_df['pvalue'].mean():.3f}",
-            f"{stats['mean_discrimination']:.3f}",
-            f"{stats['mean_difficulty']:.3f}",
-            f"{stats['sd_difficulty']:.3f}",
-            'Enabled' if enemy_check else 'Disabled'
-        ]
-    }
     
-    if tif_at_cut is not None:
-        summary_data['Metric'].extend([f'TIF @ θ={theta_cut:.1f}', f'TCC @ θ={theta_cut:.1f}'])
-        summary_data['Value'].extend([f"{tif_at_cut:.2f}", f"{tcc_at_cut:.2f}"])
+    # Display as key metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Test Length", len(selected_df))
+        st.metric("Mean P-value", f"{selected_df['pvalue'].mean():.3f}")
+        st.metric("Mean Rasch B", f"{stats['mean_difficulty']:.3f}")
+    with col2:
+        st.metric("Cronbach Alpha", f"{alpha:.3f}")
+        st.metric("Mean Discrimination", f"{stats['mean_discrimination']:.3f}")
+        st.metric("SD Rasch B", f"{stats['sd_difficulty']:.3f}")
+    with col3:
+        st.metric("Enemy Check", "✅ Enabled" if enemy_check else "⭕ Disabled")
+        if not use_ctt_mode and tif_at_cut is not None:
+            st.metric(f"TIF @ θ={theta_cut:.1f}", f"{tif_at_cut:.2f}")
+            st.metric(f"TCC @ θ={theta_cut:.1f}", f"{tcc_at_cut:.2f}")
     
-    summary_df = pd.DataFrame(summary_data)
-    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+    # Additional TIF/TCC values at ±1 (skip in CTT mode)
+    if not use_ctt_mode and tif_at_cut is not None:
+        if form_data.get('tif_at_low') is not None or form_data.get('tif_at_high') is not None:
+            st.subheader("📊 Additional TIF/TCC Values")
+            add_col1, add_col2 = st.columns(2)
+            with add_col1:
+                if form_data.get('tif_at_low') is not None:
+                    st.metric(f"TIF @ θ={theta_cut-1:.1f}", f"{form_data['tif_at_low']:.2f}")
+                    st.metric(f"TCC @ θ={theta_cut-1:.1f}", f"{form_data['tcc_at_low']:.2f}")
+            with add_col2:
+                if form_data.get('tif_at_high') is not None:
+                    st.metric(f"TIF @ θ={theta_cut+1:.1f}", f"{form_data['tif_at_high']:.2f}")
+                    st.metric(f"TCC @ θ={theta_cut+1:.1f}", f"{form_data['tcc_at_high']:.2f}")
 
 # ==================== Main Application ====================
 
@@ -535,7 +596,7 @@ def main():
     uploaded_file = st.file_uploader(
         "Choose CSV or Excel file",
         type=['csv', 'xlsx', 'xls'],
-        help="Required columns: item_id, domain, rasch_b, pvalue, point_biserial"
+        help="Required columns: item_id, domain, rasch_b, pvalue, point_biserial. Optional: raschb_cat, enemy_ids"
     )
     
     if uploaded_file is None:
@@ -544,11 +605,13 @@ def main():
         # Show example format
         with st.expander("📋 Example File Format"):
             example_df = pd.DataFrame({
-                'item_id': [1, 2, 3, 4, 5],
+                'item_id': ['NCX0001', 'NCX0002', 'NCX0003', 'NCX0004', 'NCX0005'],
                 'domain': ['Cardiology', 'Cardiology', 'Pharmacology', 'Med-Surg', 'Med-Surg'],
                 'rasch_b': [0.15, -0.32, 0.45, -0.10, 0.22],
                 'pvalue': [0.62, 0.75, 0.55, 0.68, 0.60],
-                'point_biserial': [0.35, 0.42, 0.38, 0.40, 0.36]
+                'point_biserial': [0.35, 0.42, 0.38, 0.40, 0.36],
+                'raschb_cat': ['6. hard', '3. easy', '6. hard', '4. moderately easy', '6. hard'],
+                'enemy_ids': ['NCX0002', '', 'NCX0004', 'NCX0003', '']
             })
             st.dataframe(example_df)
             
@@ -611,49 +674,88 @@ def main():
     
     approach = st.sidebar.radio(
         "Approach", 
-        options=['IRT', 'CTT'], 
-        help="IRT uses Rasch model, CTT uses classical statistics"
+        options=['Base Form Optimal Under Rasch', 'IRT', 'CTT'],
+        index=0,
+        help="Base Form: Max info at logit cut | IRT: Rasch with TIF/TCC targets | CTT: Classical statistics"
     )
     
     st.sidebar.divider()
     
-    # Domain distribution - improved layout
+    # Domain distribution - tidy layout
     st.sidebar.subheader("📚 Domain Distribution")
     st.sidebar.caption("Set minimum and maximum items per domain")
-    
+
     domain_constraints = {}
-    
-    # Create a more compact display
-    for domain in domains:
-        with st.sidebar.container():
-            st.markdown(f"**{domain}**")
-            col1, col2 = st.columns(2)
-            with col1:
-                min_val = st.number_input(
-                    "Min", 
-                    min_value=0, 
-                    max_value=test_length, 
-                    value=9, 
-                    key=f"min_{domain}",
-                    label_visibility="collapsed"
-                )
-            with col2:
-                max_val = st.number_input(
-                    "Max", 
-                    min_value=min_val, 
-                    max_value=test_length, 
-                    value=9, 
-                    key=f"max_{domain}",
-                    label_visibility="collapsed"
-                )
-            
-            # Show visual indicator
-            if min_val == max_val:
-                st.caption(f"🎯 Exactly {min_val} items")
-            else:
-                st.caption(f"📊 {min_val}-{max_val} items")
-        
+
+    # Calculate smart default: distribute test length evenly across domains
+    n_domains = len(domains)
+    default_per_domain = test_length // n_domains if n_domains > 0 else test_length
+    default_min = max(0, default_per_domain - 3)  # Allow some flexibility
+    default_max = min(test_length, default_per_domain + 3)  # Don't exceed test length
+
+    domain_constraints_df = pd.DataFrame({
+        'Domain': domains,
+        'Min': [default_min] * n_domains,
+        'Max': [default_max] * n_domains
+    })
+
+    domain_constraints_df = st.sidebar.data_editor(
+        domain_constraints_df,
+        use_container_width=True,
+        hide_index=True,
+        key="domain_constraints_editor",
+        column_config={
+            'Domain': st.column_config.TextColumn('Domain', disabled=True),
+            'Min': st.column_config.NumberColumn('Min', min_value=0, max_value=test_length, step=1),
+            'Max': st.column_config.NumberColumn('Max', min_value=0, max_value=test_length, step=1)
+        }
+    )
+
+    for _, row in domain_constraints_df.iterrows():
+        domain = row['Domain']
+        min_val = int(row['Min']) if pd.notna(row['Min']) else 0
+        max_val_raw = int(row['Max']) if pd.notna(row['Max']) else min_val
+        max_val = max(min_val, min(max_val_raw, test_length))
         domain_constraints[domain] = {'min': min_val, 'max': max_val}
+
+    # Rasch B category distribution - tidy layout
+    raschb_cat_constraints = {}
+    if 'raschb_cat' in items_df.columns:
+        raschb_cats = sorted(items_df['raschb_cat'].unique().tolist())
+        st.sidebar.subheader("🏷️ Rasch B Category Distribution")
+        st.sidebar.caption("Set minimum and maximum items per Rasch B category")
+
+        n_cats = len(raschb_cats)
+        default_per_cat = test_length // n_cats if n_cats > 0 else test_length
+        default_cat_min = max(0, default_per_cat - 3)
+        default_cat_max = min(test_length, default_per_cat + 3)
+
+        raschb_constraints_df = pd.DataFrame({
+            'Rasch B Category': raschb_cats,
+            'Min': [default_cat_min] * n_cats,
+            'Max': [default_cat_max] * n_cats
+        })
+
+        raschb_constraints_df = st.sidebar.data_editor(
+            raschb_constraints_df,
+            use_container_width=True,
+            hide_index=True,
+            key="raschb_cat_constraints_editor",
+            column_config={
+                'Rasch B Category': st.column_config.TextColumn('Rasch B Category', disabled=True),
+                'Min': st.column_config.NumberColumn('Min', min_value=0, max_value=test_length, step=1),
+                'Max': st.column_config.NumberColumn('Max', min_value=0, max_value=test_length, step=1)
+            }
+        )
+
+        for _, row in raschb_constraints_df.iterrows():
+            cat = row['Rasch B Category']
+            min_val = int(row['Min']) if pd.notna(row['Min']) else 0
+            max_val_raw = int(row['Max']) if pd.notna(row['Max']) else min_val
+            max_val = max(min_val, min(max_val_raw, test_length))
+            raschb_cat_constraints[cat] = {'min': min_val, 'max': max_val}
+    else:
+        st.sidebar.info("Rasch B category column (raschb_cat) not found. Category constraints are disabled.")
     
     st.sidebar.divider()
     
@@ -673,8 +775,8 @@ def main():
     common_items_str = st.sidebar.text_input(
         "Common Item IDs (comma-separated)",
         value="",
-        help="e.g., 101,205,312",
-        placeholder="101,205,312"
+        help="e.g., NCX0214,NCX0215",
+        placeholder="NCX0214,NCX0215"
     )
     
     # Parse common items
@@ -682,11 +784,11 @@ def main():
     if common_items_str.strip():
         # User provided specific IDs
         try:
-            common_items = [int(x.strip()) for x in common_items_str.split(',') if x.strip()]
+            common_items = [x.strip() for x in common_items_str.split(',') if x.strip()]
             if len(common_items) != n_common:
                 st.sidebar.warning(f"⚠️ Expected {n_common} common items, got {len(common_items)}")
         except ValueError:
-            st.sidebar.error("❌ Invalid item IDs. Use comma-separated numbers.")
+            st.sidebar.error("❌ Invalid item IDs. Use comma-separated IDs.")
     elif n_common > 0:
         # Auto-sample based on domain weights
         st.sidebar.info(f"🎲 Auto-sampling {n_common} common items proportionally by domain")
@@ -731,37 +833,60 @@ def main():
     excluded_items_str = st.sidebar.text_input(
         "Excluded Item IDs (comma-separated)",
         value="",
-        help="e.g., 45,78,99",
-        placeholder="45,78,99"
+        help="e.g., NCX0450,NCX0782",
+        placeholder="NCX0450,NCX0782"
     )
     
     # Parse excluded items
     excluded_items = []
     if excluded_items_str.strip():
         try:
-            excluded_items = [int(x.strip()) for x in excluded_items_str.split(',') if x.strip()]
+            excluded_items = [x.strip() for x in excluded_items_str.split(',') if x.strip()]
             st.sidebar.info(f"🚫 Excluding {len(excluded_items)} items")
         except ValueError:
-            st.sidebar.error("❌ Invalid item IDs. Use comma-separated numbers.")
+            st.sidebar.error("❌ Invalid item IDs. Use comma-separated IDs.")
     
     st.sidebar.divider()
     
     # Quality constraints
     st.sidebar.subheader("⚙️ Quality Constraints")
-    maximize_alpha = st.sidebar.checkbox("Maximize Reliability", value=True)
+    use_ctt_mode = st.sidebar.checkbox(
+        "CTT (w/ Max Reliability)",
+        value=False,
+        help="Use CTT statistics (p-value, point-biserial) and maximize reliability. Ignores Rasch parameters."
+    )
     
     enemy_check = st.sidebar.checkbox(
         "Enforce Enemy Constraints",
         value=True,
-        help="Prevent enemy items (marked in 'enemy' column) from appearing together in the same form"
+        help="Prevent enemy items (marked in 'enemy_ids' column) from appearing together in the same form"
     )
     
-    # IRT Evaluation Points
+    # Evaluation Points and Constraints
     eval_points = None
     tif_tolerance = None
     tcc_tolerance = None
+    logit_cut = 0.0
     
-    if approach == 'IRT':
+    # Base Form Optimal Under Rasch
+    if approach == 'Base Form Optimal Under Rasch':
+        st.sidebar.subheader("📐 Logit Cut")
+        logit_cut = st.sidebar.number_input(
+            "Logit Cut (θ)", 
+            -3.0, 3.0, 0.0, 0.1,
+            help="Objective: Maximize test information at this θ value"
+        )
+        st.sidebar.info("🎯 Objective: Max test information at logit cut")
+        
+        # Store in eval_points for consistency, including -1 and +1 points
+        eval_points = {
+            'theta_low': logit_cut - 1.0,
+            'theta_mid': logit_cut,
+            'theta_high': logit_cut + 1.0
+        }
+    
+    # IRT with full evaluation points
+    elif approach == 'IRT':
         st.sidebar.subheader("📐 IRT Evaluation Points")
         logit_cut = st.sidebar.number_input("Logit Cut (θ)", -3.0, 3.0, 0.0, 0.1)
         
@@ -849,28 +974,69 @@ def main():
     # Assemble button
     st.sidebar.divider()
     if st.sidebar.button("🚀 Assemble Form", type="primary", use_container_width=True):
-        # Prepare config
-        config = {
-            'test_length': test_length,
-            'approach': approach,
-            'domain_constraints': domain_constraints,
-            'maximize_alpha': maximize_alpha,
-            'eval_points': eval_points,
-            'tif_tolerance': {'tif': tif_tolerance, 'tcc': tcc_tolerance} if tif_tolerance else None,
-            'pvalue_min': pvalue_min,
-            'pvalue_max': pvalue_max,
-            'pbs_threshold': discrimination_min,
-            'mean_difficulty_target': mean_difficulty_target,
-            'difficulty_tolerance': difficulty_tolerance,
-            'excluded_items': excluded_items,
-            'common_items': common_items,
-            'enemy_check': enemy_check
-        }
+        # Validate constraints before assembly
+        validation_errors = []
         
-        # Validate that common item count matches if specified
+        # Check domain constraints sum
+        total_min = sum(dc['min'] for dc in domain_constraints.values())
+        total_max = sum(dc['max'] for dc in domain_constraints.values())
+        
+        if total_min > test_length:
+            validation_errors.append(f"❌ Domain minimums sum to {total_min}, exceeds test length {test_length}")
+        
+        if total_max < test_length:
+            validation_errors.append(f"❌ Domain maximums sum to {total_max}, less than test length {test_length}")
+
+        # Check Rasch B category constraints sum
+        if raschb_cat_constraints:
+            total_cat_min = sum(rc['min'] for rc in raschb_cat_constraints.values())
+            total_cat_max = sum(rc['max'] for rc in raschb_cat_constraints.values())
+
+            if total_cat_min > test_length:
+                validation_errors.append(f"❌ Rasch B category minimums sum to {total_cat_min}, exceeds test length {test_length}")
+
+            if total_cat_max < test_length:
+                validation_errors.append(f"❌ Rasch B category maximums sum to {total_cat_max}, less than test length {test_length}")
+        
+        # Check if common item count matches
         if n_common > 0 and len(common_items) != n_common:
-            st.error(f"❌ Please specify exactly {n_common} common item IDs")
+            validation_errors.append(f"❌ Expected {n_common} common items, got {len(common_items)}")
+        
+        # Check if enough items meet quality thresholds
+        if discrimination_min > 0:
+            eligible_items = items_df[items_df['point_biserial'] >= discrimination_min]
+            if len(eligible_items) < test_length:
+                validation_errors.append(f"❌ Only {len(eligible_items)} items meet discrimination threshold {discrimination_min:.2f}, need {test_length}")
+        
+        if pvalue_min > 0 or pvalue_max < 1.0:
+            eligible_items = items_df[(items_df['pvalue'] >= pvalue_min) & (items_df['pvalue'] <= pvalue_max)]
+            if len(eligible_items) < test_length:
+                validation_errors.append(f"❌ Only {len(eligible_items)} items in p-value range [{pvalue_min:.2f}, {pvalue_max:.2f}], need {test_length}")
+        
+        if validation_errors:
+            for error in validation_errors:
+                st.error(error)
+            st.info("💡 Try: Relax domain constraints, lower discrimination threshold, or widen p-value range")
         else:
+            # Prepare config
+            config = {
+                'test_length': test_length,
+                'approach': approach,
+                'domain_constraints': domain_constraints,
+                'raschb_cat_constraints': raschb_cat_constraints,
+                'use_ctt_mode': use_ctt_mode,
+                'eval_points': eval_points,
+                'tif_tolerance': {'tif': tif_tolerance, 'tcc': tcc_tolerance} if tif_tolerance else None,
+                'pvalue_min': pvalue_min,
+                'pvalue_max': pvalue_max,
+                'pbs_threshold': discrimination_min,
+                'mean_difficulty_target': mean_difficulty_target,
+                'difficulty_tolerance': difficulty_tolerance,
+                'excluded_items': excluded_items,
+                'common_items': common_items,
+                'enemy_check': enemy_check
+            }
+            
             # Store results in session state
             st.session_state['assembly_complete'] = False
             st.session_state['config'] = config
@@ -879,6 +1045,7 @@ def main():
             st.session_state['approach'] = approach
             st.session_state['eval_points'] = eval_points
             st.session_state['enemy_check'] = enemy_check
+            st.session_state['use_ctt_mode'] = use_ctt_mode
             
             # Assemble multiple forms
             with st.spinner(f"🔧 Running CBC solver for {n_forms} form(s)..."):
@@ -904,15 +1071,37 @@ def main():
                         stats = evaluate_form(selected_df, config)
                         alpha = estimate_cronbachs_alpha(selected_df)
                         
-                        # Calculate TIF/TCC at logit cut
+                        # Calculate TIF/TCC at evaluation points
                         if eval_points:
                             theta_cut = eval_points['theta_mid']
                             idx_cut = np.argmin(np.abs(stats['theta_range'] - theta_cut))
                             tif_at_cut = stats['tif_values'][idx_cut]
                             tcc_at_cut = stats['tcc_values'][idx_cut]
+                            
+                            # Also calculate at -1 and +1 if available
+                            tif_at_low = None
+                            tcc_at_low = None
+                            tif_at_high = None
+                            tcc_at_high = None
+                            
+                            if 'theta_low' in eval_points:
+                                theta_low = eval_points['theta_low']
+                                idx_low = np.argmin(np.abs(stats['theta_range'] - theta_low))
+                                tif_at_low = stats['tif_values'][idx_low]
+                                tcc_at_low = stats['tcc_values'][idx_low]
+                            
+                            if 'theta_high' in eval_points:
+                                theta_high = eval_points['theta_high']
+                                idx_high = np.argmin(np.abs(stats['theta_range'] - theta_high))
+                                tif_at_high = stats['tif_values'][idx_high]
+                                tcc_at_high = stats['tcc_values'][idx_high]
                         else:
                             tif_at_cut = None
                             tcc_at_cut = None
+                            tif_at_low = None
+                            tcc_at_low = None
+                            tif_at_high = None
+                            tcc_at_high = None
                         
                         # Store form data
                         all_forms.append({
@@ -922,6 +1111,10 @@ def main():
                             'alpha': alpha,
                             'tif_at_cut': tif_at_cut,
                             'tcc_at_cut': tcc_at_cut,
+                            'tif_at_low': tif_at_low,
+                            'tcc_at_low': tcc_at_low,
+                            'tif_at_high': tif_at_high,
+                            'tcc_at_high': tcc_at_high,
                             'theta_cut': theta_cut if eval_points else None
                         })
                         
@@ -946,16 +1139,21 @@ def main():
         approach = st.session_state['approach']
         eval_points = st.session_state['eval_points']
         enemy_check = st.session_state['enemy_check']
+        use_ctt_mode = st.session_state.get('use_ctt_mode', False)
         
         # Display results for all forms
         st.header(f"📊 Assembly Results ({len(all_forms)} form(s))")
+        
+        # Show mode indicator
+        if use_ctt_mode:
+            st.info("ℹ️ **CTT Mode Active:** Results are based on classical test theory statistics (p-value, point-biserial). TIF/TCC plots are not applicable.")
         
         # Show common items summary
         if common_items:
             st.info(f"🔗 **Common Items ({len(common_items)}):** {', '.join(map(str, common_items))}")
         
-        # Overlay plots for all forms (IRT only)
-        if approach == 'IRT' and eval_points:
+        # Overlay plots for all forms (IRT and Base Form, but not in CTT mode)
+        if not use_ctt_mode and (approach == 'IRT' or approach == 'Base Form Optimal Under Rasch') and eval_points:
             st.subheader("📈 TIF/TCC Comparison Across Forms")
             
             colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray']
@@ -975,17 +1173,29 @@ def main():
                     line=dict(color=color, width=2)
                 ))
             
-            # Add target markers
+            # Add target markers (for IRT with full targets)
             thetas = [eval_points.get('theta_low'), eval_points.get('theta_mid'), eval_points.get('theta_high')]
             tif_targets = [eval_points.get('tif_low'), eval_points.get('tif_mid'), eval_points.get('tif_high')]
             
-            fig_tif_all.add_trace(go.Scatter(
-                x=[t for t in thetas if t is not None],
-                y=[tgt for tgt in tif_targets if tgt is not None],
-                mode='markers',
-                name='Targets',
-                marker=dict(size=12, color='black', symbol='diamond')
-            ))
+            # Only show target markers if we have all three points (IRT mode)
+            if all(t is not None for t in tif_targets):
+                fig_tif_all.add_trace(go.Scatter(
+                    x=[t for t in thetas if t is not None],
+                    y=[tgt for tgt in tif_targets if tgt is not None],
+                    mode='markers',
+                    name='Targets',
+                    marker=dict(size=12, color='black', symbol='diamond')
+                ))
+            
+            # Add vertical line at logit cut (for Base Form or IRT)
+            if eval_points.get('theta_mid') is not None:
+                fig_tif_all.add_vline(
+                    x=eval_points.get('theta_mid'),
+                    line_dash="dash",
+                    line_color="red",
+                    annotation_text=f"Logit Cut ({eval_points.get('theta_mid'):.1f})",
+                    annotation_position="top right"
+                )
             
             fig_tif_all.update_layout(
                 title="Test Information Function (TIF) - All Forms",
@@ -1038,13 +1248,13 @@ def main():
         if len(all_forms) == 1:
             # Single form - show directly
             form_data = all_forms[0]
-            display_form_results(form_data, eval_points, common_items, approach, enemy_check)
+            display_form_results(form_data, eval_points, common_items, approach, enemy_check, use_ctt_mode)
         else:
             # Multiple forms - use tabs
             tabs = st.tabs([f"Form {i+1}" for i in range(len(all_forms))])
             for i, (tab, form_data) in enumerate(zip(tabs, all_forms)):
                 with tab:
-                    display_form_results(form_data, eval_points, common_items, approach, enemy_check)
+                    display_form_results(form_data, eval_points, common_items, approach, enemy_check, use_ctt_mode)
         
         # Excel export with all forms
         output = BytesIO()
@@ -1070,9 +1280,18 @@ def main():
                     'SD Rasch B': f"{stats['sd_difficulty']:.3f}"
                 }
                 
-                if tif_at_cut is not None:
+                if not use_ctt_mode and tif_at_cut is not None:
                     row[f'TIF @ θ={theta_cut:.1f}'] = f"{tif_at_cut:.2f}"
                     row[f'TCC @ θ={theta_cut:.1f}'] = f"{tcc_at_cut:.2f}"
+                    
+                    # Add -1 and +1 values if available (Base Form)
+                    if form_data.get('tif_at_low') is not None:
+                        row[f'TIF @ θ={theta_cut-1:.1f}'] = f"{form_data['tif_at_low']:.2f}"
+                        row[f'TCC @ θ={theta_cut-1:.1f}'] = f"{form_data['tcc_at_low']:.2f}"
+                    
+                    if form_data.get('tif_at_high') is not None:
+                        row[f'TIF @ θ={theta_cut+1:.1f}'] = f"{form_data['tif_at_high']:.2f}"
+                        row[f'TCC @ θ={theta_cut+1:.1f}'] = f"{form_data['tcc_at_high']:.2f}"
                 
                 comparison_rows.append(row)
             
@@ -1109,7 +1328,7 @@ def main():
                         'Enemy Check'
                     ],
                     'Value': [
-                        len(selected_df),
+                        str(len(selected_df)),
                         f"{alpha:.3f}",
                         f"{selected_df['pvalue'].mean():.3f}",
                         f"{stats['mean_discrimination']:.3f}",
@@ -1119,9 +1338,18 @@ def main():
                     ]
                 }
                 
-                if tif_at_cut is not None:
+                if not use_ctt_mode and tif_at_cut is not None:
                     summary_data['Metric'].extend([f'TIF @ θ={theta_cut:.1f}', f'TCC @ θ={theta_cut:.1f}'])
                     summary_data['Value'].extend([f"{tif_at_cut:.2f}", f"{tcc_at_cut:.2f}"])
+                    
+                    # Add -1 and +1 values if available (Base Form)
+                    if form_data.get('tif_at_low') is not None:
+                        summary_data['Metric'].extend([f'TIF @ θ={theta_cut-1:.1f}', f'TCC @ θ={theta_cut-1:.1f}'])
+                        summary_data['Value'].extend([f"{form_data['tif_at_low']:.2f}", f"{form_data['tcc_at_low']:.2f}"])
+                    
+                    if form_data.get('tif_at_high') is not None:
+                        summary_data['Metric'].extend([f'TIF @ θ={theta_cut+1:.1f}', f'TCC @ θ={theta_cut+1:.1f}'])
+                        summary_data['Value'].extend([f"{form_data['tif_at_high']:.2f}", f"{form_data['tcc_at_high']:.2f}"])
                 
                 # Add domain counts
                 summary_data['Metric'].append('')  # Blank row
@@ -1131,7 +1359,17 @@ def main():
                 
                 for domain, count in stats['domain_counts'].items():
                     summary_data['Metric'].append(f"  {domain}")
-                    summary_data['Value'].append(count)
+                    summary_data['Value'].append(str(count))
+
+                if stats.get('raschb_cat_counts'):
+                    summary_data['Metric'].append('')  # Blank row
+                    summary_data['Value'].append('')
+                    summary_data['Metric'].append('Rasch B Category Distribution')
+                    summary_data['Value'].append('')
+
+                    for cat, count in stats['raschb_cat_counts'].items():
+                        summary_data['Metric'].append(f"  {cat}")
+                        summary_data['Value'].append(str(count))
                 
                 summary_df = pd.DataFrame(summary_data)
                 summary_df.to_excel(writer, sheet_name=f'Form_{form_num}_Summary', index=False)
