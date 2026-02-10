@@ -1,20 +1,23 @@
 """
-CBC_ATA - CBC Solver-Based Automated Test Assembly
+CBC_ATA - CBC Solver-Based Automated Test Assembly (Simultaneous)
 ====================================================
 Sample bank: item_bank_hosted2.csv
 Description:
 Uses Mixed Integer Programming with CBC (Coin-or Branch and Cut) solver
-for optimal test assembly. Works on Streamlit Community Cloud (free tier).
+for simultaneous multi-form test assembly. Works on Streamlit Community Cloud (free tier).
 
 Features:
 - Pure optimization approach (no LLM needed)
-- Base Form Optimal Under Rasch: Max test information at logit cut
-- Handles IRT (full TIF/TCC) and CTT constraints
+- Simultaneous assembly: All forms optimized in a single MIP problem
+- Base Form Optimal Under CTT / Rasch: Max test information at logit cut
+- Handles IRT (Rasch) (full TIF/TCC) and CTT constraints
 - Domain distribution constraints
+- Common items supported across forms
+- Enemy item constraints enforced
 - Free and fast
 
 Author: AI Assistant
-Date: December 3, 2025
+Date: February 9, 2026
 """
 
 import streamlit as st
@@ -24,7 +27,7 @@ from pulp import *
 import plotly.graph_objects as go
 from io import BytesIO
 from datetime import datetime
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 # Page configuration
 st.set_page_config(
@@ -142,254 +145,612 @@ def estimate_cronbachs_alpha(items_df: pd.DataFrame) -> float:
 
 # ==================== CBC Optimization ====================
 
+def assemble_forms_with_cbc(
+    items_df: pd.DataFrame,
+    config: Dict[str, Any],
+    n_forms: int
+) -> Dict[str, Any]:
+    """Assemble one or more test forms simultaneously using the CBC solver."""
+
+    if n_forms < 1:
+        raise ValueError("n_forms must be at least 1")
+
+    df = items_df.copy().reset_index(drop=True)
+    if 'item_id' not in df.columns:
+        raise ValueError("Item pool must include 'item_id'")
+
+    df['item_id'] = df['item_id'].astype(str)
+    n_items = len(df)
+
+    if n_items == 0:
+        return {
+            'status': 'Infeasible',
+            'objective_value': 0,
+            'form_objectives': [],
+            'selected_forms': [[] for _ in range(n_forms)],
+            'solver': 'CBC'
+        }
+
+    test_length = config['test_length']
+    approach = config.get('approach', 'IRT (Rasch)')
+    use_ctt_mode = config.get('use_ctt_mode', False)
+    domain_constraints = config.get('domain_constraints', {})
+    raschb_cat_constraints = config.get('raschb_cat_constraints', {})
+
+    excluded_items = {str(x) for x in config.get('excluded_items', [])}
+    common_items = {str(x) for x in config.get('common_items', [])}
+
+    # Filter common items to only those that exist in the dataframe
+    valid_common_items = common_items & set(df['item_id'].astype(str))
+    invalid_common_items = common_items - valid_common_items
+    
+    if invalid_common_items:
+        error_msg = f"❌ Common items not found in item bank: {', '.join(sorted(invalid_common_items))}"
+        return {
+            'status': 'Infeasible',
+            'objective_value': 0,
+            'form_objectives': [],
+            'selected_forms': [[] for _ in range(n_forms)],
+            'validation_errors': [error_msg],
+            'error_message': error_msg,
+            'solver': 'CBC'
+        }
+    
+    common_items = valid_common_items
+
+    if excluded_items & common_items:
+        raise ValueError("Common items cannot be in the excluded list")
+
+    eval_points = config.get('eval_points', {}) or {}
+    tif_tolerance_cfg = config.get('tif_tolerance') or {}
+    pvalue_min = config.get('pvalue_min')
+    pvalue_max = config.get('pvalue_max')
+    pbs_threshold = config.get('pbs_threshold')
+    enemy_check = config.get('enemy_check', False)
+
+    mean_diff_target = config.get('mean_diff_target')
+    mean_diff_tolerance = config.get('mean_diff_tolerance', 0.1)
+    apply_mean_diff = config.get('apply_mean_diff', False)
+    mean_difficulty_target = config.get('mean_difficulty_target')
+    difficulty_tolerance = config.get('difficulty_tolerance')
+
+    # Helper function for safe type conversion
+    def _safe_float(value: Any, default: Optional[float] = 0.0) -> Optional[float]:
+        try:
+            if pd.isna(value):
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    # Pre-solve validation to catch infeasibility early
+    validation_issues = []
+    
+    # Check 1: Domain constraint totals
+    domain_min_sum = sum(constraints.get('min', 0) for constraints in domain_constraints.values())
+    domain_max_sum = sum(
+        constraints.get('max', 0) for constraints in domain_constraints.values() 
+        if constraints.get('max', 0) > 0  # Only count non-zero max constraints
+    )
+    
+    if domain_min_sum > test_length:
+        validation_issues.append(
+            f"Domain minimums sum ({domain_min_sum}) exceeds test length ({test_length})"
+        )
+    
+    # Only validate max if constraints are specified
+    if domain_max_sum > 0 and domain_max_sum < test_length:
+        validation_issues.append(
+            f"Domain maximums sum ({domain_max_sum}) less than test length ({test_length})"
+        )
+    
+    # Check 2: Rasch B category constraint totals
+    if raschb_cat_constraints:
+        cat_min_sum = sum(constraints.get('min', 0) for constraints in raschb_cat_constraints.values())
+        cat_max_sum = sum(
+            constraints.get('max', 0) for constraints in raschb_cat_constraints.values()
+            if constraints.get('max', 0) > 0  # Only count non-zero max constraints
+        )
+        
+        if cat_min_sum > test_length:
+            validation_issues.append(
+                f"Rasch B category minimums sum ({cat_min_sum}) exceeds test length ({test_length})"
+            )
+        
+        # Only validate max if constraints are specified
+        if cat_max_sum > 0 and cat_max_sum < test_length:
+            validation_issues.append(
+                f"Rasch B category maximums sum ({cat_max_sum}) less than test length ({test_length})"
+            )
+    
+    # Check 3: Common items validation
+    if common_items:
+        if len(common_items) > test_length:
+            validation_issues.append(
+                f"Common items count ({len(common_items)}) exceeds test length ({test_length})"
+            )
+        
+        # Check if common items are in excluded or fail quality filters
+        for common_id in common_items:
+            if common_id in excluded_items:
+                validation_issues.append(f"Common item {common_id} is also in excluded items")
+            
+            # Find the item in dataframe
+            item_mask = df['item_id'] == common_id
+            if not item_mask.any():
+                validation_issues.append(f"Common item {common_id} NOT FOUND in item bank")
+            elif item_mask.any():
+                item_row = df[item_mask].iloc[0]
+                
+                # Only check CTT filters for CTT approach
+                if use_ctt_mode or approach == 'CTT':
+                    pval = _safe_float(item_row.get('pvalue'), None)
+                    pbis = _safe_float(item_row.get('point_biserial'), None)
+                    
+                    if pvalue_min is not None and pvalue_max is not None:
+                        if pval is None or pval < pvalue_min or pval > pvalue_max:
+                            validation_issues.append(
+                                f"Common item {common_id} fails p-value filter ({pval:.3f} not in [{pvalue_min:.3f}, {pvalue_max:.3f}])"
+                            )
+                    
+                    if pbs_threshold is not None:
+                        if pbis is None or pbis < pbs_threshold:
+                            validation_issues.append(
+                                f"Common item {common_id} fails discrimination threshold ({pbis:.3f} < {pbs_threshold:.3f})"
+                            )
+    
+    # Check 4: Eligible item count
+    eligible_mask = pd.Series([True] * n_items, index=range(n_items))
+    
+    # Only apply CTT filters for CTT approach
+    if use_ctt_mode or approach == 'CTT':
+        if pvalue_min is not None and pvalue_max is not None:
+            eligible_mask &= (df['pvalue'] >= pvalue_min) & (df['pvalue'] <= pvalue_max)
+        
+        if pbs_threshold is not None:
+            eligible_mask &= (df['point_biserial'] >= pbs_threshold)
+    
+    if excluded_items:
+        eligible_mask &= ~df['item_id'].isin(excluded_items)
+    
+    eligible_count = eligible_mask.sum()
+    required_count = test_length * n_forms
+    
+    # Account for common items that can be reused
+    if common_items:
+        # Check if common items are in eligible set
+        common_eligible = 0
+        for common_id in common_items:
+            item_mask = (df['item_id'] == common_id) & eligible_mask
+            if item_mask.any():
+                common_eligible += 1
+            else:
+                validation_issues.append(
+                    f"Common item {common_id} is filtered out and not eligible for assembly"
+                )
+        
+        # Calculate unique slots needed (non-common items)
+        unique_slots_available = eligible_count - common_eligible
+        unique_slots_needed = required_count - (common_eligible * n_forms)
+        
+        if unique_slots_available < unique_slots_needed:
+            validation_issues.append(
+                f"Not enough unique eligible items: {unique_slots_available} available, {unique_slots_needed} needed "
+                f"({common_eligible} common items in {n_forms} forms + {unique_slots_needed} unique items)"
+            )
+    else:
+        if eligible_count < required_count:
+            validation_issues.append(
+                f"Not enough eligible items: {eligible_count} available, {required_count} needed "
+                f"({test_length} per form × {n_forms} forms)"
+            )
+    
+    # Report validation issues
+    if validation_issues:
+        error_msg = "⚠️ **FEASIBILITY ISSUES DETECTED:**\n\n"
+        for i, issue in enumerate(validation_issues, 1):
+            error_msg += f"{i}. {issue}\n"
+        error_msg += "\n**Possible solutions:**\n"
+        error_msg += "- Relax domain/category constraints\n"
+        error_msg += "- Lower discrimination threshold\n"
+        error_msg += "- Widen p-value range\n"
+        error_msg += "- Remove excluded items\n"
+        error_msg += "- Reduce number of forms or test length\n"
+        
+        return {
+            'status': 'Infeasible',
+            'objective_value': 0,
+            'form_objectives': [],
+            'selected_forms': [[] for _ in range(n_forms)],
+            'solver': 'CBC',
+            'validation_errors': validation_issues,
+            'error_message': error_msg
+        }
+    
+    # Variables declaration (moved here after validation)
+    prob = LpProblem("Test_Assembly_Simultaneous", LpMaximize)
+
+    item_vars: Dict[Tuple[int, int], LpVariable] = {}
+    for item_idx in range(n_items):
+        for form_idx in range(n_forms):
+            var_name = f"x_item{item_idx}_form{form_idx}"
+            item_vars[(item_idx, form_idx)] = LpVariable(var_name, cat='Binary')
+
+    # Objective coefficients per item
+    weights: List[float] = []
+    if use_ctt_mode or approach == 'CTT':
+        for _, row in df.iterrows():
+            weights.append(_safe_float(row.get('point_biserial'), 0.0))
+    elif approach == 'Base Form Optimal Under CTT / Rasch' and eval_points:
+        theta_mid = eval_points.get('theta_mid', 0.0)
+        for _, row in df.iterrows():
+            b_param = _safe_float(row.get('rasch_b'), 0.0)
+            weights.append(rasch_information(theta_mid, b_param))
+    elif approach == 'IRT (Rasch)' and eval_points:
+        theta_low = eval_points.get('theta_low', -1.0)
+        theta_mid = eval_points.get('theta_mid', 0.0)
+        theta_high = eval_points.get('theta_high', 1.0)
+        for _, row in df.iterrows():
+            b_param = _safe_float(row.get('rasch_b'), 0.0)
+            info_low = rasch_information(theta_low, b_param) * 0.3
+            info_mid = rasch_information(theta_mid, b_param) * 0.4
+            info_high = rasch_information(theta_high, b_param) * 0.3
+            weights.append(info_low + info_mid + info_high)
+    else:
+        for _, row in df.iterrows():
+            weights.append(_safe_float(row.get('point_biserial'), 0.0))
+
+    prob += lpSum(
+        weights[item_idx] * item_vars[(item_idx, form_idx)]
+        for item_idx in range(n_items)
+        for form_idx in range(n_forms)
+    )
+
+    # Precompute index lists for faster constraint construction
+    domain_item_indices = {
+        domain: df.index[df['domain'] == domain].tolist()
+        for domain in domain_constraints.keys()
+    }
+
+    raschb_item_indices = {}
+    if raschb_cat_constraints and 'raschb_cat' in df.columns:
+        raschb_item_indices = {
+            category: df.index[df['raschb_cat'] == category].tolist()
+            for category in raschb_cat_constraints.keys()
+        }
+
+    # 1. Test length for each form
+    for form_idx in range(n_forms):
+        prob += lpSum(item_vars[(item_idx, form_idx)] for item_idx in range(n_items)) == test_length
+
+    # 2. Domain constraints per form
+    for form_idx in range(n_forms):
+        for domain, constraints in domain_constraints.items():
+            indices = domain_item_indices.get(domain, [])
+            min_count = constraints.get('min', 0)
+            max_count = constraints.get('max', 0)
+
+            if min_count > 0:
+                prob += lpSum(item_vars[(idx, form_idx)] for idx in indices) >= min_count
+
+            if max_count > 0 and max_count < test_length:
+                prob += lpSum(item_vars[(idx, form_idx)] for idx in indices) <= max_count
+
+    # 3. Rasch B category constraints per form
+    if raschb_item_indices:
+        for form_idx in range(n_forms):
+            for category, constraints in raschb_cat_constraints.items():
+                indices = raschb_item_indices.get(category, [])
+                min_count = constraints.get('min', 0)
+                max_count = constraints.get('max', 0)
+
+                if min_count > 0:
+                    prob += lpSum(item_vars[(idx, form_idx)] for idx in indices) >= min_count
+
+                if max_count > 0 and max_count < test_length:
+                    prob += lpSum(item_vars[(idx, form_idx)] for idx in indices) <= max_count
+
+    # 4. P-value eligibility (CTT only)
+    if use_ctt_mode or approach == 'CTT':
+        if pvalue_min is not None and pvalue_max is not None:
+            for item_idx in range(n_items):
+                pval = _safe_float(df.at[item_idx, 'pvalue'], None)
+                if pval is None or pval < pvalue_min or pval > pvalue_max:
+                    for form_idx in range(n_forms):
+                        prob += item_vars[(item_idx, form_idx)] == 0
+
+    # 5. Discrimination threshold (CTT only)
+    if use_ctt_mode or approach == 'CTT':
+        if pbs_threshold is not None:
+            for item_idx in range(n_items):
+                pbis = _safe_float(df.at[item_idx, 'point_biserial'], None)
+                if pbis is None or pbis < pbs_threshold:
+                    for form_idx in range(n_forms):
+                        prob += item_vars[(item_idx, form_idx)] == 0
+
+    # 6. Explicit exclusions
+    if excluded_items:
+        for item_idx in range(n_items):
+            item_id = df.at[item_idx, 'item_id']
+            if item_id in excluded_items:
+                for form_idx in range(n_forms):
+                    prob += item_vars[(item_idx, form_idx)] == 0
+
+    # 7. Common items present in every form
+    if common_items:
+        for item_idx in range(n_items):
+            item_id = df.at[item_idx, 'item_id']
+            if item_id in common_items:
+                for form_idx in range(n_forms):
+                    prob += item_vars[(item_idx, form_idx)] == 1
+
+    # 8. Prevent reuse of non-common items across forms
+    if n_forms > 1:
+        for item_idx in range(n_items):
+            item_id = df.at[item_idx, 'item_id']
+            if item_id not in common_items:
+                prob += lpSum(item_vars[(item_idx, form_idx)] for form_idx in range(n_forms)) <= 1
+
+    # 9. Mean difficulty controls (optional)
+    if apply_mean_diff and mean_diff_target is not None:
+        for form_idx in range(n_forms):
+            if use_ctt_mode or approach == 'CTT':
+                avg_pval = (
+                    lpSum(
+                        _safe_float(df.at[item_idx, 'pvalue']) * item_vars[(item_idx, form_idx)]
+                        for item_idx in range(n_items)
+                    ) / test_length
+                )
+                prob += avg_pval >= mean_diff_target - mean_diff_tolerance
+                prob += avg_pval <= mean_diff_target + mean_diff_tolerance
+            else:
+                avg_b = (
+                    lpSum(
+                        _safe_float(df.at[item_idx, 'rasch_b']) * item_vars[(item_idx, form_idx)]
+                        for item_idx in range(n_items)
+                    ) / test_length
+                )
+                prob += avg_b >= mean_diff_target - mean_diff_tolerance
+                prob += avg_b <= mean_diff_target + mean_diff_tolerance
+
+    if (use_ctt_mode or approach == 'CTT') and mean_difficulty_target is not None and difficulty_tolerance is not None:
+        for form_idx in range(n_forms):
+            avg_pval = (
+                lpSum(
+                    _safe_float(df.at[item_idx, 'pvalue']) * item_vars[(item_idx, form_idx)]
+                    for item_idx in range(n_items)
+                ) / test_length
+            )
+            prob += avg_pval >= mean_difficulty_target - difficulty_tolerance
+            prob += avg_pval <= mean_difficulty_target + difficulty_tolerance
+
+    # 10. Base form TIF minimums around logit cut
+    if not use_ctt_mode and approach == 'Base Form Optimal Under CTT / Rasch' and eval_points:
+        tolerance = eval_points.get('tolerance', 0.0)
+        if tolerance > 0:
+            theta_mid = eval_points.get('theta_mid', 0.0)
+            theta_low_tol = theta_mid - tolerance
+            theta_high_tol = theta_mid + tolerance
+            min_tif = test_length * 0.20
+
+            for form_idx in range(n_forms):
+                tif_mid = lpSum(
+                    rasch_information(theta_mid, _safe_float(df.at[item_idx, 'rasch_b'])) * item_vars[(item_idx, form_idx)]
+                    for item_idx in range(n_items)
+                )
+                tif_low = lpSum(
+                    rasch_information(theta_low_tol, _safe_float(df.at[item_idx, 'rasch_b'])) * item_vars[(item_idx, form_idx)]
+                    for item_idx in range(n_items)
+                )
+                tif_high = lpSum(
+                    rasch_information(theta_high_tol, _safe_float(df.at[item_idx, 'rasch_b'])) * item_vars[(item_idx, form_idx)]
+                    for item_idx in range(n_items)
+                )
+
+                prob += tif_mid >= min_tif
+                prob += tif_low >= min_tif * 0.5
+                prob += tif_high >= min_tif * 0.5
+
+    # 11. IRT TIF/TCC targets per form
+    if not use_ctt_mode and approach == 'IRT (Rasch)' and eval_points and tif_tolerance_cfg:
+        tif_tol = tif_tolerance_cfg.get('tif', 1.5)
+        tcc_tol = tif_tolerance_cfg.get('tcc', 1.0)
+        tolerance = eval_points.get('tolerance', 0.0)
+
+        theta_low = eval_points.get('theta_low', -1.0)
+        theta_mid = eval_points.get('theta_mid', 0.0)
+        theta_high = eval_points.get('theta_high', 1.0)
+
+        tif_target_low = eval_points.get('tif_low', 0.0)
+        tif_target_mid = eval_points.get('tif_mid', 0.0)
+        tif_target_high = eval_points.get('tif_high', 0.0)
+
+        # Only apply TIF constraints if targets are > 0
+        if tif_target_low > 0 or tif_target_mid > 0 or tif_target_high > 0:
+            for form_idx in range(n_forms):
+                if tif_target_low > 0:
+                    tif_low_val = lpSum(
+                        rasch_information(theta_low, _safe_float(df.at[item_idx, 'rasch_b'])) * item_vars[(item_idx, form_idx)]
+                        for item_idx in range(n_items)
+                    )
+                    prob += tif_low_val >= tif_target_low - tif_tol
+                    prob += tif_low_val <= tif_target_low + tif_tol
+                
+                if tif_target_mid > 0:
+                    tif_mid_val = lpSum(
+                        rasch_information(theta_mid, _safe_float(df.at[item_idx, 'rasch_b'])) * item_vars[(item_idx, form_idx)]
+                        for item_idx in range(n_items)
+                    )
+                    prob += tif_mid_val >= tif_target_mid - tif_tol
+                    prob += tif_mid_val <= tif_target_mid + tif_tol
+                
+                if tif_target_high > 0:
+                    tif_high_val = lpSum(
+                        rasch_information(theta_high, _safe_float(df.at[item_idx, 'rasch_b'])) * item_vars[(item_idx, form_idx)]
+                        for item_idx in range(n_items)
+                    )
+                    prob += tif_high_val >= tif_target_high - tif_tol
+                    prob += tif_high_val <= tif_target_high + tif_tol
+
+            if tolerance > 0:
+                min_tif = test_length * 0.20
+                theta_low_tol = theta_mid - tolerance
+                theta_high_tol = theta_mid + tolerance
+
+                tif_low_tol = lpSum(
+                    rasch_information(theta_low_tol, _safe_float(df.at[item_idx, 'rasch_b'])) * item_vars[(item_idx, form_idx)]
+                    for item_idx in range(n_items)
+                )
+                tif_high_tol = lpSum(
+                    rasch_information(theta_high_tol, _safe_float(df.at[item_idx, 'rasch_b'])) * item_vars[(item_idx, form_idx)]
+                    for item_idx in range(n_items)
+                )
+
+                prob += tif_low_tol >= min_tif * 0.5
+                prob += tif_high_tol >= min_tif * 0.5
+
+            if tcc_tol is not None:
+                # Only apply TCC constraint at mid point (logit cut) if target > 0
+                tcc_mid_target = eval_points.get('tcc_mid', 0.0)
+
+                if tcc_mid_target > 0:
+                    tcc_mid_val = lpSum(
+                        rasch_probability(theta_mid, _safe_float(df.at[item_idx, 'rasch_b'])) * item_vars[(item_idx, form_idx)]
+                        for item_idx in range(n_items)
+                    )
+
+                    prob += tcc_mid_val >= tcc_mid_target - tcc_tol
+                    prob += tcc_mid_val <= tcc_mid_target + tcc_tol
+
+    # 12. Enemy item constraints per form
+    if enemy_check:
+        enemy_col = None
+        if 'enemy_ids' in df.columns:
+            enemy_col = 'enemy_ids'
+        elif 'enemy' in df.columns:
+            enemy_col = 'enemy'
+
+        if enemy_col:
+            item_id_to_index = {df.at[idx, 'item_id']: idx for idx in range(n_items)}
+            enemy_pairs = set()
+
+            for item_idx in range(n_items):
+                enemy_str = df.at[item_idx, enemy_col] if enemy_col in df.columns else ''
+                if pd.notna(enemy_str) and str(enemy_str).strip():
+                    for enemy_id in str(enemy_str).split(','):
+                        enemy_id = enemy_id.strip()
+                        if not enemy_id:
+                            continue
+                        if enemy_id in item_id_to_index and enemy_id != df.at[item_idx, 'item_id']:
+                            other_idx = item_id_to_index[enemy_id]
+                            pair = tuple(sorted((item_idx, other_idx)))
+                            enemy_pairs.add(pair)
+
+            for item_a, item_b in enemy_pairs:
+                for form_idx in range(n_forms):
+                    prob += item_vars[(item_a, form_idx)] + item_vars[(item_b, form_idx)] <= 1
+
+    solver = PULP_CBC_CMD(
+        msg=0,           # Silent mode (errors only)
+        timeLimit=360     # 6-minute limit
+    )
+    
+    # Debug: Check problem size
+    prob_vars = len(prob.variables())
+    prob_cons = len(prob.constraints)
+    
+    try:
+        prob.solve(solver)
+    except Exception as e:
+        error_info = (
+            f"CBC Solver Failed:\n"
+            f"  Problem Size: {prob_vars} variables, {prob_cons} constraints\n"
+            f"  Items: {n_items}, Forms: {n_forms}\n"
+            f"  Common items: {len(common_items)}, Unique items needed per form: {test_length - len(common_items)}\n"
+            f"  Error: {str(e)}\n\n"
+            f"Possible causes:\n"
+            f"  - Constraints are too tight (infeasible)\n"
+            f"  - Item pool too small for test length and form count\n"
+            f"  - Domain/category constraints conflict\n"
+        )
+        raise Exception(error_info)
+
+    status = LpStatus.get(prob.status, 'Unknown')
+    objective_value = value(prob.objective) if prob.objective else 0
+    
+    # If infeasible, provide detailed diagnostics
+    if status == 'Infeasible':
+        diagnostic_msg = (
+            f"⚠️ **SOLVER INFEASIBILITY DIAGNOSTICS:**\n\n"
+            f"**Problem Configuration:**\n"
+            f"- Forms: {n_forms}\n"
+            f"- Items per form: {test_length}\n"
+            f"- Common items: {len(common_items)}\n"
+            f"- Unique items needed: {test_length - len(common_items)} per form\n"
+            f"- Total pool: {n_items} items\n\n"
+            f"**Problem Size:**\n"
+            f"- Variables: {prob_vars}\n"
+            f"- Constraints: {prob_cons}\n\n"
+            f"**Possible Issues:**\n"
+            f"1. Domain/Rasch B constraints too restrictive\n"
+            f"2. Item pool lacks sufficient items in constrained domains\n"
+            f"3. Excluded items overlaps with required items\n"
+            f"4. TIF/TCC targets conflicting with form structure\n"
+        )
+        return {
+            'status': 'Infeasible',
+            'objective_value': 0,
+            'form_objectives': [],
+            'selected_forms': [[] for _ in range(n_forms)],
+            'validation_errors': [diagnostic_msg],
+            'error_message': diagnostic_msg,
+            'solver': 'CBC'
+        }
+    
+    selected_forms: List[List[str]] = []
+    for form_idx in range(n_forms):
+        form_selection: List[str] = []
+        for item_idx in range(n_items):
+            var_value = item_vars[(item_idx, form_idx)].varValue
+            if var_value is not None and var_value > 0.5:
+                form_selection.append(df.at[item_idx, 'item_id'])
+        selected_forms.append(form_selection)
+
+    form_objectives: List[float] = []
+    for form_idx in range(n_forms):
+        form_value = 0.0
+        for item_idx in range(n_items):
+            var_value = item_vars[(item_idx, form_idx)].varValue
+            if var_value is not None and var_value > 0.5:
+                form_value += weights[item_idx]
+        form_objectives.append(form_value)
+
+    return {
+        'status': status,
+        'objective_value': objective_value,
+        'form_objectives': form_objectives,
+        'selected_forms': selected_forms,
+        'solver': 'CBC'
+    }
+
+
 def assemble_form_with_cbc(
     items_df: pd.DataFrame,
     config: Dict[str, Any]
 ) -> Tuple[List[str], Dict[str, Any]]:
-    """
-    Assemble test form using CBC solver (Mixed Integer Programming)
-    
-    Args:
-        items_df: Item pool DataFrame
-        config: Configuration dictionary
-    
-    Returns:
-        (selected_item_ids, assembly_info)
-    """
-    n_items = len(items_df)
-    test_length = config['test_length']
-    approach = config['approach']
-    use_ctt_mode = config.get('use_ctt_mode', False)
-    domain_constraints = config['domain_constraints']
-    raschb_cat_constraints = config.get('raschb_cat_constraints', {})
-    
-    # Create the LP problem
-    prob = LpProblem("Test_Assembly", LpMaximize)
-    
-    # Decision variables: x[i] = 1 if item i is selected, 0 otherwise
-    item_vars = {}
-    for idx, row in items_df.iterrows():
-        item_id = row['item_id']
-        item_vars[item_id] = LpVariable(f"x_{item_id}", cat='Binary')
-    
-    # ===== OBJECTIVE FUNCTION =====
-    if use_ctt_mode:
-        # CTT mode: Maximize reliability using discrimination (point-biserial)
-        # Ignore Rasch parameters, use CTT statistics only
-        prob += lpSum([items_df[items_df['item_id']==item_id]['point_biserial'].values[0] * item_vars[item_id]
-                      for item_id in item_vars.keys()])
-    elif (approach == 'Base Form Optimal Under Rasch' or approach == 'IRT') and config.get('eval_points'):
-        # Maximize information at cut score using Rasch model
-        eval_points = config['eval_points']
-        theta_mid = eval_points.get('theta_mid', 0.0)
-        
-        # Calculate information contribution of each item at theta_mid
-        info_contributions = {}
-        for idx, row in items_df.iterrows():
-            item_id = row['item_id']
-            b = row['rasch_b']
-            info = rasch_information(theta_mid, b)
-            info_contributions[item_id] = info
-        
-        # Objective: maximize total information at cut score
-        prob += lpSum([info_contributions[item_id] * item_vars[item_id] 
-                      for item_id in item_vars.keys()])
-    else:
-        # Default: maximize discrimination
-        prob += lpSum([items_df[items_df['item_id']==item_id]['point_biserial'].values[0] * item_vars[item_id]
-                      for item_id in item_vars.keys()])
-    
-    # ===== CONSTRAINTS =====
-    
-    # 1. Test length constraint
-    prob += lpSum([item_vars[item_id] for item_id in item_vars.keys()]) == test_length
-    
-    # 2. Domain constraints
-    for domain, constraints in domain_constraints.items():
-        domain_items = items_df[items_df['domain'] == domain]
-        domain_item_ids = domain_items['item_id'].tolist()
-        
-        min_count = constraints['min']
-        max_count = constraints['max']
-        
-        if min_count > 0:
-            prob += lpSum([item_vars[item_id] for item_id in domain_item_ids 
-                          if item_id in item_vars]) >= min_count
-        
-        if max_count < test_length:
-            prob += lpSum([item_vars[item_id] for item_id in domain_item_ids 
-                          if item_id in item_vars]) <= max_count
+    """Backward-compatible single-form wrapper around simultaneous solver."""
 
-    # 2b. Rasch B category constraints
-    if raschb_cat_constraints and 'raschb_cat' in items_df.columns:
-        for category, constraints in raschb_cat_constraints.items():
-            category_items = items_df[items_df['raschb_cat'] == category]
-            category_item_ids = category_items['item_id'].tolist()
+    result = assemble_forms_with_cbc(items_df, config, 1)
+    selected_forms = result.get('selected_forms', [])
+    selected_ids = selected_forms[0] if selected_forms else []
 
-            min_count = constraints['min']
-            max_count = constraints['max']
-
-            if min_count > 0:
-                prob += lpSum([item_vars[item_id] for item_id in category_item_ids
-                              if item_id in item_vars]) >= min_count
-
-            if max_count < test_length:
-                prob += lpSum([item_vars[item_id] for item_id in category_item_ids
-                              if item_id in item_vars]) <= max_count
-    
-    # 3. P-value constraints (CTT)
-    if 'pvalue_min' in config and 'pvalue_max' in config:
-        for idx, row in items_df.iterrows():
-            item_id = row['item_id']
-            pval = row['pvalue']
-            if pval < config['pvalue_min'] or pval > config['pvalue_max']:
-                prob += item_vars[item_id] == 0
-    
-    # 4. Discrimination threshold
-    if 'pbs_threshold' in config and config['pbs_threshold'] is not None:
-        for idx, row in items_df.iterrows():
-            item_id = row['item_id']
-            if row['point_biserial'] < config['pbs_threshold']:
-                prob += item_vars[item_id] == 0
-    
-    # 5. Excluded items
-    if 'excluded_items' in config and config['excluded_items']:
-        for excluded_id in config['excluded_items']:
-            if excluded_id in item_vars:
-                prob += item_vars[excluded_id] == 0
-    
-    # 6. Common items (must be included)
-    if 'common_items' in config and config['common_items']:
-        for common_id in config['common_items']:
-            if common_id in item_vars:
-                prob += item_vars[common_id] == 1
-    
-    # 7. Mean difficulty constraint (if specified)
-    if config.get('apply_mean_diff') and config.get('mean_diff_target') is not None:
-        target = config['mean_diff_target']
-        tolerance = config.get('mean_diff_tolerance', 0.1)
-        
-        if use_ctt_mode or approach == 'CTT':
-            # Mean P-value constraint (CTT)
-            avg_pval = lpSum([items_df[items_df['item_id']==item_id]['pvalue'].values[0] * item_vars[item_id]
-                             for item_id in item_vars.keys()]) / test_length
-            
-            prob += avg_pval >= target - tolerance
-            prob += avg_pval <= target + tolerance
-        elif approach == 'IRT':
-            # Mean Rasch B constraint
-            avg_b = lpSum([items_df[items_df['item_id']==item_id]['rasch_b'].values[0] * item_vars[item_id]
-                          for item_id in item_vars.keys()]) / test_length
-            
-            prob += avg_b >= target - tolerance
-            prob += avg_b <= target + tolerance
-        else:
-            # Base Form: use Rasch B
-            avg_b = lpSum([items_df[items_df['item_id']==item_id]['rasch_b'].values[0] * item_vars[item_id]
-                          for item_id in item_vars.keys()]) / test_length
-            
-            prob += avg_b >= target - tolerance
-            prob += avg_b <= target + tolerance
-    
-    # 8. Mean difficulty constraint (CTT only)
-    if (use_ctt_mode or approach == 'CTT') and config.get('mean_difficulty_target') is not None and config.get('difficulty_tolerance') is not None:
-        target_mean = config['mean_difficulty_target']
-        tolerance = config['difficulty_tolerance']
-        
-        # Average p-value constraint
-        avg_pval = lpSum([items_df[items_df['item_id']==item_id]['pvalue'].values[0] * item_vars[item_id]
-                         for item_id in item_vars.keys()]) / test_length
-        
-        prob += avg_pval >= target_mean - tolerance
-        prob += avg_pval <= target_mean + tolerance
-    
-    # 9. TIF constraints (IRT only, not in CTT mode)
-    if not use_ctt_mode and approach == 'IRT' and config.get('eval_points') and config.get('tif_tolerance'):
-        eval_points = config['eval_points']
-        tif_tol = config['tif_tolerance'].get('tif', 1.5)
-        
-        # TIF at low point
-        theta_low = eval_points.get('theta_low', -1.0)
-        tif_target_low = eval_points.get('tif_low', 8.0)
-        
-        tif_low = lpSum([rasch_information(theta_low, items_df[items_df['item_id']==item_id]['rasch_b'].values[0]) * 
-                        item_vars[item_id] for item_id in item_vars.keys()])
-        
-        prob += tif_low >= tif_target_low - tif_tol
-        prob += tif_low <= tif_target_low + tif_tol
-        
-        # TIF at mid point (cut score)
-        theta_mid = eval_points.get('theta_mid', 0.0)
-        tif_target_mid = eval_points.get('tif_mid', 12.0)
-        
-        tif_mid = lpSum([rasch_information(theta_mid, items_df[items_df['item_id']==item_id]['rasch_b'].values[0]) * 
-                        item_vars[item_id] for item_id in item_vars.keys()])
-        
-        prob += tif_mid >= tif_target_mid - tif_tol
-        prob += tif_mid <= tif_target_mid + tif_tol
-        
-        # TIF at high point
-        theta_high = eval_points.get('theta_high', 1.0)
-        tif_target_high = eval_points.get('tif_high', 8.0)
-        
-        tif_high = lpSum([rasch_information(theta_high, items_df[items_df['item_id']==item_id]['rasch_b'].values[0]) * 
-                         item_vars[item_id] for item_id in item_vars.keys()])
-        
-        prob += tif_high >= tif_target_high - tif_tol
-        prob += tif_high <= tif_target_high + tif_tol
-    
-    # 10. Enemy item constraints
-    if config.get('enemy_check', False):
-        # Build enemy pairs from 'enemy_ids' column if it exists
-        enemy_pairs = []
-        enemy_col = None
-        if 'enemy_ids' in items_df.columns:
-            enemy_col = 'enemy_ids'
-        elif 'enemy' in items_df.columns:
-            enemy_col = 'enemy'
-
-        if enemy_col:
-            for idx, row in items_df.iterrows():
-                item_id = row['item_id']
-                enemy_str = row.get(enemy_col, '')
-                
-                if pd.notna(enemy_str) and str(enemy_str).strip():
-                    # Parse comma-separated enemy IDs
-                    try:
-                        enemy_ids = [x.strip() for x in str(enemy_str).split(',') if x.strip()]
-                        for enemy_id in enemy_ids:
-                            if enemy_id in item_vars and item_id in item_vars:
-                                # Ensure we don't add duplicate pairs
-                                if (item_id, enemy_id) not in enemy_pairs and (enemy_id, item_id) not in enemy_pairs:
-                                    enemy_pairs.append((item_id, enemy_id))
-                    except (ValueError, AttributeError):
-                        pass
-            
-            # Add constraints: if item A is selected, enemy B cannot be selected
-            for item_a, item_b in enemy_pairs:
-                prob += item_vars[item_a] + item_vars[item_b] <= 1
-    
-    # Solve the problem using CBC solver
-    solver = PULP_CBC_CMD(msg=0)  # msg=0 suppresses solver output
-    prob.solve(solver)
-    
-    # Extract solution
-    selected_ids = []
-    for item_id in item_vars.keys():
-        if item_vars[item_id].varValue == 1:
-            selected_ids.append(item_id)
-    
-    # Assembly info
-    status = LpStatus[prob.status]
-    objective_value = value(prob.objective) if prob.objective else 0
-    
     assembly_info = {
-        'status': status,
-        'objective_value': objective_value,
+        'status': result.get('status', 'Unknown'),
+        'objective_value': result.get('objective_value', 0),
         'n_items_selected': len(selected_ids),
-        'solver': 'CBC'
+        'solver': result.get('solver', 'CBC')
     }
-    
+
     return selected_ids, assembly_info
 
 # ==================== Evaluation ====================
@@ -397,7 +758,7 @@ def assemble_form_with_cbc(
 def evaluate_form(items_df: pd.DataFrame, config: Dict[str, Any]) -> Dict[str, Any]:
     """Evaluate assembled form quality"""
     
-    approach = config.get('approach', 'IRT')
+    approach = config.get('approach', 'IRT (Rasch)')
     b_params = items_df['rasch_b'].values
     
     # Calculate TIF and TCC across theta range
@@ -666,32 +1027,32 @@ def main():
     
     test_length = st.sidebar.number_input(
         "Items per Form", 
-        min_value=10, 
+        min_value=0, 
         max_value=200, 
-        value=72, 
-        step=1
+        value=0, 
+        step=1,
+        help="Number of items in each test form (0 = not set)"
     )
     
     approach = st.sidebar.radio(
         "Approach", 
-        options=['Base Form Optimal Under Rasch', 'IRT', 'CTT'],
+        options=['Base Form Optimal Under CTT / Rasch', 'IRT (Rasch)', 'CTT'],
         index=0,
-        help="Base Form: Max info at logit cut | IRT: Rasch with TIF/TCC targets | CTT: Classical statistics"
+        help="Base Form: Max info at logit cut | IRT (Rasch): Rasch with TIF/TCC targets | CTT: Classical statistics"
     )
     
     st.sidebar.divider()
     
     # Domain distribution - tidy layout
     st.sidebar.subheader("📚 Domain Distribution")
-    st.sidebar.caption("Set minimum and maximum items per domain")
+    st.sidebar.caption("Set minimum and maximum items per domain (0 = no constraint)")
 
     domain_constraints = {}
 
-    # Calculate smart default: distribute test length evenly across domains
+    # Default: no domain constraints (all set to 0)
     n_domains = len(domains)
-    default_per_domain = test_length // n_domains if n_domains > 0 else test_length
-    default_min = max(0, default_per_domain - 3)  # Allow some flexibility
-    default_max = min(test_length, default_per_domain + 3)  # Don't exceed test length
+    default_min = 0  # No minimum constraint
+    default_max = 0  # No maximum constraint (0 = unconstrained)
 
     domain_constraints_df = pd.DataFrame({
         'Domain': domains,
@@ -706,8 +1067,8 @@ def main():
         key="domain_constraints_editor",
         column_config={
             'Domain': st.column_config.TextColumn('Domain', disabled=True),
-            'Min': st.column_config.NumberColumn('Min', min_value=0, max_value=test_length, step=1),
-            'Max': st.column_config.NumberColumn('Max', min_value=0, max_value=test_length, step=1)
+            'Min': st.column_config.NumberColumn('Min', min_value=0, step=1),
+            'Max': st.column_config.NumberColumn('Max', min_value=0, step=1)
         }
     )
 
@@ -723,12 +1084,11 @@ def main():
     if 'raschb_cat' in items_df.columns:
         raschb_cats = sorted(items_df['raschb_cat'].unique().tolist())
         st.sidebar.subheader("🏷️ Rasch B Category Distribution")
-        st.sidebar.caption("Set minimum and maximum items per Rasch B category")
+        st.sidebar.caption("Set minimum and maximum items per Rasch B category (0 = no constraint)")
 
         n_cats = len(raschb_cats)
-        default_per_cat = test_length // n_cats if n_cats > 0 else test_length
-        default_cat_min = max(0, default_per_cat - 3)
-        default_cat_max = min(test_length, default_per_cat + 3)
+        default_cat_min = 0  # No minimum constraint
+        default_cat_max = 0  # No maximum constraint (0 = unconstrained)
 
         raschb_constraints_df = pd.DataFrame({
             'Rasch B Category': raschb_cats,
@@ -743,8 +1103,8 @@ def main():
             key="raschb_cat_constraints_editor",
             column_config={
                 'Rasch B Category': st.column_config.TextColumn('Rasch B Category', disabled=True),
-                'Min': st.column_config.NumberColumn('Min', min_value=0, max_value=test_length, step=1),
-                'Max': st.column_config.NumberColumn('Max', min_value=0, max_value=test_length, step=1)
+                'Min': st.column_config.NumberColumn('Min', min_value=0, step=1),
+                'Max': st.column_config.NumberColumn('Max', min_value=0, step=1)
             }
         )
 
@@ -763,68 +1123,21 @@ def main():
     st.sidebar.subheader("🔗 Common Items")
     st.sidebar.caption("Items that MUST appear in all forms")
     
-    n_common = st.sidebar.number_input(
-        "Number of Common Items",
-        min_value=0,
-        max_value=test_length // 2,
-        value=0,
-        step=1,
-        help="Number of items shared across all parallel forms"
-    )
-    
     common_items_str = st.sidebar.text_input(
         "Common Item IDs (comma-separated)",
         value="",
-        help="e.g., NCX0214,NCX0215",
+        help="e.g., NCX0214,NCX0215. These items will appear in ALL forms.",
         placeholder="NCX0214,NCX0215"
     )
     
     # Parse common items
     common_items = []
     if common_items_str.strip():
-        # User provided specific IDs
         try:
             common_items = [x.strip() for x in common_items_str.split(',') if x.strip()]
-            if len(common_items) != n_common:
-                st.sidebar.warning(f"⚠️ Expected {n_common} common items, got {len(common_items)}")
+            st.sidebar.info(f"🔗 {len(common_items)} common item(s) specified")
         except ValueError:
             st.sidebar.error("❌ Invalid item IDs. Use comma-separated IDs.")
-    elif n_common > 0:
-        # Auto-sample based on domain weights
-        st.sidebar.info(f"🎲 Auto-sampling {n_common} common items proportionally by domain")
-        
-        # Calculate how many items per domain
-        total_domain_items = sum(dc['min'] for dc in domain_constraints.values())
-        
-        sampled_items = []
-        for domain, constraints in domain_constraints.items():
-            domain_items = items_df[items_df['domain'] == domain]
-            
-            # Calculate proportion
-            domain_weight = constraints['min'] / total_domain_items if total_domain_items > 0 else 1.0 / len(domain_constraints)
-            n_from_domain = max(1, int(n_common * domain_weight))
-            
-            # Sample randomly from this domain
-            if len(domain_items) >= n_from_domain:
-                sample = domain_items.sample(n=n_from_domain, random_state=42)
-                sampled_items.extend(sample['item_id'].tolist())
-        
-        # Adjust to exact count if needed
-        if len(sampled_items) > n_common:
-            common_items = sampled_items[:n_common]
-        elif len(sampled_items) < n_common:
-            # Sample more from largest domain
-            remaining = n_common - len(sampled_items)
-            largest_domain = max(domain_constraints.keys(), key=lambda d: domain_constraints[d]['min'])
-            additional = items_df[
-                (items_df['domain'] == largest_domain) & 
-                (~items_df['item_id'].isin(sampled_items))
-            ].sample(n=min(remaining, len(items_df[items_df['domain'] == largest_domain])), random_state=42)
-            common_items = sampled_items + additional['item_id'].tolist()
-        else:
-            common_items = sampled_items
-        
-        st.sidebar.success(f"✅ Auto-selected: {', '.join(map(str, common_items))}")
     
     # Excluded Items
     st.sidebar.subheader("🚫 Excluded Items")
@@ -889,27 +1202,43 @@ def main():
             help="Acceptable deviation from target mean p-value",
             key="ctt_tolerance"
         )
-    # Base Form Optimal Under Rasch
-    elif approach == 'Base Form Optimal Under Rasch':
+    # Base Form Optimal Under CTT / Rasch
+    elif approach == 'Base Form Optimal Under CTT / Rasch':
         st.sidebar.subheader("📐 Logit Cut")
         logit_cut = st.sidebar.number_input(
             "Logit Cut (θ)",
             -3.0, 3.0, 0.0, 0.1,
             help="Objective: Maximize test information at this θ value"
         )
+        
+        tolerance = st.sidebar.number_input(
+            "Tolerance (±)",
+            0.0, 10.0, 0.2, 0.1,
+            help="Minimum TIF acceptable at logit cut ± this range",
+            key="base_form_tolerance"
+        )
+        
         st.sidebar.info("🎯 Objective: Max test information at logit cut")
 
         # Store in eval_points for consistency, including -1 and +1 points
         eval_points = {
             'theta_low': logit_cut - 1.0,
             'theta_mid': logit_cut,
-            'theta_high': logit_cut + 1.0
+            'theta_high': logit_cut + 1.0,
+            'tolerance': tolerance
         }
 
-    # IRT with full evaluation points
-    elif approach == 'IRT':
-        st.sidebar.subheader("📐 IRT Evaluation Points")
+    # IRT (Rasch) with full evaluation points
+    elif approach == 'IRT (Rasch)':
+        st.sidebar.subheader("📐 IRT (Rasch) Evaluation Points")
         logit_cut = st.sidebar.number_input("Logit Cut (θ)", -3.0, 3.0, 0.0, 0.1)
+        
+        tolerance = st.sidebar.number_input(
+            "Tolerance (±)",
+            0.0, 10.0, 0.2, 0.1,
+            help="Minimum TIF acceptable at logit cut ± this range",
+            key="irt_tolerance"
+        )
         
         evaluation_points = [logit_cut - 1.0, logit_cut, logit_cut + 1.0]
         st.sidebar.markdown(f"**Points:** {evaluation_points[0]:.1f}, {evaluation_points[1]:.1f}, {evaluation_points[2]:.1f}")
@@ -918,21 +1247,21 @@ def main():
         st.sidebar.markdown("**TIF Targets:**")
         col1, col2, col3 = st.sidebar.columns(3)
         with col1:
-            tif_low = st.number_input(f"TIF @ {evaluation_points[0]:.1f}", 0.0, 50.0, 14.0, 0.5, key="tif_low")
+            tif_low = st.number_input(f"TIF @ {evaluation_points[0]:.1f}", 0.0, 50.0, 0.0, 0.5, key="tif_low", help="(0 = no constraint)")
         with col2:
-            tif_mid = st.number_input(f"TIF @ {evaluation_points[1]:.1f}", 0.0, 50.0, 18.0, 0.5, key="tif_mid")
+            tif_mid = st.number_input(f"TIF @ {evaluation_points[1]:.1f}", 0.0, 50.0, 0.0, 0.5, key="tif_mid", help="(0 = no constraint)")
         with col3:
-            tif_high = st.number_input(f"TIF @ {evaluation_points[2]:.1f}", 0.0, 50.0, 14.0, 0.5, key="tif_high")
+            tif_high = st.number_input(f"TIF @ {evaluation_points[2]:.1f}", 0.0, 50.0, 0.0, 0.5, key="tif_high", help="(0 = no constraint)")
         
         # TCC Targets
         st.sidebar.markdown("**TCC Targets (Expected Score):**")
         col1, col2, col3 = st.sidebar.columns(3)
         with col1:
-            tcc_low = st.number_input(f"TCC @ {evaluation_points[0]:.1f}", 0.0, float(test_length), float(test_length * 0.3), 1.0, key="tcc_low")
+            tcc_low = st.number_input(f"TCC @ {evaluation_points[0]:.1f}", 0.0, float(test_length), 0.0, 1.0, key="tcc_low", help="(0 = no constraint)")
         with col2:
-            tcc_mid = st.number_input(f"TCC @ {evaluation_points[1]:.1f}", 0.0, float(test_length), float(test_length * 0.5), 1.0, key="tcc_mid")
+            tcc_mid = st.number_input(f"TCC @ {evaluation_points[1]:.1f}", 0.0, float(test_length), 0.0, 1.0, key="tcc_mid", help="(0 = no constraint)")
         with col3:
-            tcc_high = st.number_input(f"TCC @ {evaluation_points[2]:.1f}", 0.0, float(test_length), float(test_length * 0.7), 1.0, key="tcc_high")
+            tcc_high = st.number_input(f"TCC @ {evaluation_points[2]:.1f}", 0.0, float(test_length), 0.0, 1.0, key="tcc_high", help="(0 = no constraint)")
         
         # Tolerances
         st.sidebar.markdown("**Tolerances:**")
@@ -951,7 +1280,8 @@ def main():
             'tif_high': tif_high,
             'tcc_low': tcc_low,
             'tcc_mid': tcc_mid,
-            'tcc_high': tcc_high
+            'tcc_high': tcc_high,
+            'tolerance': tolerance
         }
 
     # CTT Approach (when not using CTT mode checkbox)
@@ -992,6 +1322,14 @@ def main():
         # Validate constraints before assembly
         validation_errors = []
         
+        # Check test length is set
+        if test_length == 0:
+            validation_errors.append(f"❌ Items per Form must be > 0. Set a value between 10-200")
+        
+        # Check number of forms is set
+        if n_forms == 0:
+            validation_errors.append(f"❌ Number of Forms must be > 0. Set a value >= 1")
+        
         # Check domain constraints sum
         total_min = sum(dc['min'] for dc in domain_constraints.values())
         total_max = sum(dc['max'] for dc in domain_constraints.values())
@@ -1013,20 +1351,17 @@ def main():
             if total_cat_max < test_length:
                 validation_errors.append(f"❌ Rasch B category maximums sum to {total_cat_max}, less than test length {test_length}")
         
-        # Check if common item count matches
-        if n_common > 0 and len(common_items) != n_common:
-            validation_errors.append(f"❌ Expected {n_common} common items, got {len(common_items)}")
-        
-        # Check if enough items meet quality thresholds
-        if discrimination_min > 0:
-            eligible_items = items_df[items_df['point_biserial'] >= discrimination_min]
-            if len(eligible_items) < test_length:
-                validation_errors.append(f"❌ Only {len(eligible_items)} items meet discrimination threshold {discrimination_min:.2f}, need {test_length}")
-        
-        if pvalue_min > 0 or pvalue_max < 1.0:
-            eligible_items = items_df[(items_df['pvalue'] >= pvalue_min) & (items_df['pvalue'] <= pvalue_max)]
-            if len(eligible_items) < test_length:
-                validation_errors.append(f"❌ Only {len(eligible_items)} items in p-value range [{pvalue_min:.2f}, {pvalue_max:.2f}], need {test_length}")
+        # Check if enough items meet quality thresholds (CTT only)
+        if use_ctt_mode or approach == 'CTT':
+            if discrimination_min > 0:
+                eligible_items = items_df[items_df['point_biserial'] >= discrimination_min]
+                if len(eligible_items) < test_length:
+                    validation_errors.append(f"❌ Only {len(eligible_items)} items meet discrimination threshold {discrimination_min:.2f}, need {test_length}")
+            
+            if pvalue_min > 0 or pvalue_max < 1.0:
+                eligible_items = items_df[(items_df['pvalue'] >= pvalue_min) & (items_df['pvalue'] <= pvalue_max)]
+                if len(eligible_items) < test_length:
+                    validation_errors.append(f"❌ Only {len(eligible_items)} items in p-value range [{pvalue_min:.2f}, {pvalue_max:.2f}], need {test_length}")
         
         if validation_errors:
             for error in validation_errors:
@@ -1062,90 +1397,92 @@ def main():
             st.session_state['enemy_check'] = enemy_check
             st.session_state['use_ctt_mode'] = use_ctt_mode
             
-            # Assemble multiple forms
-            with st.spinner(f"🔧 Running CBC solver for {n_forms} form(s)..."):
-                all_forms = []
-                used_items = set(excluded_items)  # Start with excluded items
+            # Assemble multiple forms simultaneously
+            with st.spinner(f"🔧 Running simultaneous CBC solver for {n_forms} form(s)..."):
+                try:
+                    result = assemble_forms_with_cbc(items_df, config, n_forms)
+                    
+                    # Check for validation errors first
+                    if 'validation_errors' in result and result['validation_errors']:
+                        st.error(result.get('error_message', 'Validation failed'))
+                        for error in result['validation_errors']:
+                            st.warning(f"• {error}")
+                    elif result['status'] != 'Optimal':
+                        st.error(f"❌ Solver status: {result['status']}")
+                        st.info("Try relaxing constraints or reducing number of forms")
+                    else:
+                        all_forms = []
+                        selected_forms = result['selected_forms']
+                        
+                        for form_num, selected_ids in enumerate(selected_forms, start=1):
+                            if not selected_ids:
+                                st.warning(f"⚠️ Form {form_num}: No items selected")
+                                continue
+                            
+                            # Get selected items
+                            selected_df = items_df[items_df['item_id'].isin(selected_ids)].copy()
+                            
+                            # Evaluate form
+                            stats = evaluate_form(selected_df, config)
+                            alpha = estimate_cronbachs_alpha(selected_df)
+                            
+                            # Calculate TIF/TCC at evaluation points
+                            if eval_points:
+                                theta_cut = eval_points['theta_mid']
+                                idx_cut = np.argmin(np.abs(stats['theta_range'] - theta_cut))
+                                tif_at_cut = stats['tif_values'][idx_cut]
+                                tcc_at_cut = stats['tcc_values'][idx_cut]
+                                
+                                # Also calculate at -1 and +1 if available
+                                tif_at_low = None
+                                tcc_at_low = None
+                                tif_at_high = None
+                                tcc_at_high = None
+                                
+                                if 'theta_low' in eval_points:
+                                    theta_low = eval_points['theta_low']
+                                    idx_low = np.argmin(np.abs(stats['theta_range'] - theta_low))
+                                    tif_at_low = stats['tif_values'][idx_low]
+                                    tcc_at_low = stats['tcc_values'][idx_low]
+                                
+                                if 'theta_high' in eval_points:
+                                    theta_high = eval_points['theta_high']
+                                    idx_high = np.argmin(np.abs(stats['theta_range'] - theta_high))
+                                    tif_at_high = stats['tif_values'][idx_high]
+                                    tcc_at_high = stats['tcc_values'][idx_high]
+                            else:
+                                tif_at_cut = None
+                                tcc_at_cut = None
+                                tif_at_low = None
+                                tcc_at_low = None
+                                tif_at_high = None
+                                tcc_at_high = None
+                            
+                            # Store form data
+                            all_forms.append({
+                                'form_num': form_num,
+                                'selected_df': selected_df,
+                                'stats': stats,
+                                'alpha': alpha,
+                                'tif_at_cut': tif_at_cut,
+                                'tcc_at_cut': tcc_at_cut,
+                                'tif_at_low': tif_at_low,
+                                'tcc_at_low': tcc_at_low,
+                                'tif_at_high': tif_at_high,
+                                'tcc_at_high': tcc_at_high,
+                                'theta_cut': theta_cut if eval_points else None
+                            })
+                            
+                            st.success(f"✅ Form {form_num}: Optimal solution found! Selected {len(selected_ids)} items")
+                        
+                        if all_forms:
+                            st.session_state['all_forms'] = all_forms
+                            st.session_state['assembly_complete'] = True
                 
-                for form_num in range(1, n_forms + 1):
-                    try:
-                        # Update config with used items to exclude
-                        config['excluded_items'] = list(used_items)
-                        
-                        selected_ids, assembly_info = assemble_form_with_cbc(items_df, config)
-                        
-                        if assembly_info['status'] != 'Optimal':
-                            st.error(f"❌ Form {form_num}: Solver status: {assembly_info['status']}")
-                            st.info("Try relaxing constraints or reducing number of forms")
-                            break
-                        
-                        # Get selected items
-                        selected_df = items_df[items_df['item_id'].isin(selected_ids)].copy()
-                        
-                        # Evaluate form
-                        stats = evaluate_form(selected_df, config)
-                        alpha = estimate_cronbachs_alpha(selected_df)
-                        
-                        # Calculate TIF/TCC at evaluation points
-                        if eval_points:
-                            theta_cut = eval_points['theta_mid']
-                            idx_cut = np.argmin(np.abs(stats['theta_range'] - theta_cut))
-                            tif_at_cut = stats['tif_values'][idx_cut]
-                            tcc_at_cut = stats['tcc_values'][idx_cut]
-                            
-                            # Also calculate at -1 and +1 if available
-                            tif_at_low = None
-                            tcc_at_low = None
-                            tif_at_high = None
-                            tcc_at_high = None
-                            
-                            if 'theta_low' in eval_points:
-                                theta_low = eval_points['theta_low']
-                                idx_low = np.argmin(np.abs(stats['theta_range'] - theta_low))
-                                tif_at_low = stats['tif_values'][idx_low]
-                                tcc_at_low = stats['tcc_values'][idx_low]
-                            
-                            if 'theta_high' in eval_points:
-                                theta_high = eval_points['theta_high']
-                                idx_high = np.argmin(np.abs(stats['theta_range'] - theta_high))
-                                tif_at_high = stats['tif_values'][idx_high]
-                                tcc_at_high = stats['tcc_values'][idx_high]
-                        else:
-                            tif_at_cut = None
-                            tcc_at_cut = None
-                            tif_at_low = None
-                            tcc_at_low = None
-                            tif_at_high = None
-                            tcc_at_high = None
-                        
-                        # Store form data
-                        all_forms.append({
-                            'form_num': form_num,
-                            'selected_df': selected_df,
-                            'stats': stats,
-                            'alpha': alpha,
-                            'tif_at_cut': tif_at_cut,
-                            'tcc_at_cut': tcc_at_cut,
-                            'tif_at_low': tif_at_low,
-                            'tcc_at_low': tcc_at_low,
-                            'tif_at_high': tif_at_high,
-                            'tcc_at_high': tcc_at_high,
-                            'theta_cut': theta_cut if eval_points else None
-                        })
-                        
-                        # Update used items (exclude common items from being marked as used)
-                        non_common_items = set(selected_ids) - set(common_items)
-                        used_items.update(non_common_items)
-                        
-                        st.success(f"✅ Form {form_num}: Optimal solution found! Selected {len(selected_ids)} items")
-                        
-                    except Exception as e:
-                        st.error(f"❌ Form {form_num} assembly failed: {e}")
-                        break
-                
-                if all_forms:
-                    st.session_state['all_forms'] = all_forms
-                    st.session_state['assembly_complete'] = True
+                except Exception as e:
+                    st.error(f"❌ Assembly failed: {e}")
+                    import traceback
+                    st.error(traceback.format_exc())
     
     # Display results if assembly is complete
     if st.session_state.get('assembly_complete', False):
@@ -1168,7 +1505,7 @@ def main():
             st.info(f"🔗 **Common Items ({len(common_items)}):** {', '.join(map(str, common_items))}")
         
         # Overlay plots for all forms (IRT and Base Form, but not in CTT mode)
-        if not use_ctt_mode and (approach == 'IRT' or approach == 'Base Form Optimal Under Rasch') and eval_points:
+        if not use_ctt_mode and (approach == 'IRT (Rasch)' or approach == 'Base Form Optimal Under CTT / Rasch') and eval_points:
             st.subheader("📈 TIF/TCC Comparison Across Forms")
             
             colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray']
