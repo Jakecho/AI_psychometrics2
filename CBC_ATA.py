@@ -71,12 +71,13 @@ def load_item_pool(uploaded_file) -> pd.DataFrame:
         
         # Validate required columns
         required_cols = ['item_id', 'domain', 'rasch_b', 'pvalue', 'point_biserial']
-        optional_cols = ['raschb_cat', 'enemy_ids']
+        optional_cols = ['raschb_cat', 'enemy_ids', 'has_image']
         missing_cols = [col for col in required_cols if col not in df.columns]
         
         if missing_cols:
             st.error(f"Missing required columns: {missing_cols}")
             st.info("Required columns: item_id, domain, rasch_b, pvalue, point_biserial")
+            st.info("Optional columns: raschb_cat, enemy_ids, has_image")
             return None
         
         # Normalize ID types for reliable matching
@@ -100,14 +101,17 @@ def load_item_pool(uploaded_file) -> pd.DataFrame:
 
 # ==================== IRT Calculations ====================
 
+# Scaling constant for Rasch model (D = 1.0 for logistic metric)
+D = 1.0
+
 def rasch_probability(theta: float, b: float) -> float:
     """Rasch model probability of correct response"""
-    return 1.0 / (1.0 + np.exp(-(theta - b)))
+    return 1.0 / (1.0 + np.exp(-D * (theta - b)))
 
 def rasch_information(theta: float, b: float) -> float:
     """Item information at theta"""
     p = rasch_probability(theta, b)
-    return p * (1 - p)
+    return (D ** 2) * p * (1 - p)
 
 def calculate_tif(theta: float, b_params: np.ndarray) -> float:
     """Test Information Function at theta"""
@@ -176,6 +180,7 @@ def assemble_forms_with_cbc(
     use_ctt_mode = config.get('use_ctt_mode', False)
     domain_constraints = config.get('domain_constraints', {})
     raschb_cat_constraints = config.get('raschb_cat_constraints', {})
+    image_constraint = config.get('image_constraint', {'min': 0, 'max': 0, 'enabled': False})
 
     excluded_items = {str(x) for x in config.get('excluded_items', [])}
     common_items = {str(x) for x in config.get('common_items', [])}
@@ -262,6 +267,35 @@ def assemble_forms_with_cbc(
             validation_issues.append(
                 f"Rasch B category maximums sum ({cat_max_sum}) less than test length ({test_length})"
             )
+    
+    # Check 2b: Image constraint validation
+    if 'has_image' in df.columns:
+        image_min = image_constraint.get('min', 0)
+        image_max = image_constraint.get('max', 0)
+        items_with_images = df['has_image'].astype(int).sum()
+        
+        # Error: min set but max = 0
+        if image_min > 0 and image_max == 0:
+            validation_issues.append(
+                f"Image minimum set ({image_min}) but maximum is 0. Set max > 0 to enable constraint."
+            )
+        
+        # Validate if constraint is enabled (max > 0)
+        if image_max > 0:
+            if image_min > test_length:
+                validation_issues.append(
+                    f"Image minimum ({image_min}) exceeds test length ({test_length})"
+                )
+            
+            if image_min > items_with_images:
+                validation_issues.append(
+                    f"Image minimum ({image_min}) exceeds available items with images ({items_with_images})"
+                )
+            
+            if image_max < image_min:
+                validation_issues.append(
+                    f"Image maximum ({image_max}) less than minimum ({image_min})"
+                )
     
     # Check 3: Common items validation
     if common_items:
@@ -392,9 +426,9 @@ def assemble_forms_with_cbc(
         theta_high = eval_points.get('theta_high', 1.0)
         for _, row in df.iterrows():
             b_param = _safe_float(row.get('rasch_b'), 0.0)
-            info_low = rasch_information(theta_low, b_param) * 0.3
-            info_mid = rasch_information(theta_mid, b_param) * 0.4
-            info_high = rasch_information(theta_high, b_param) * 0.3
+            info_low = rasch_information(theta_low, b_param) * 0.1
+            info_mid = rasch_information(theta_mid, b_param) * 0.8
+            info_high = rasch_information(theta_high, b_param) * 0.1
             weights.append(info_low + info_mid + info_high)
     else:
         for _, row in df.iterrows():
@@ -435,6 +469,19 @@ def assemble_forms_with_cbc(
 
             if max_count > 0 and max_count < test_length:
                 prob += lpSum(item_vars[(idx, form_idx)] for idx in indices) <= max_count
+
+    # 2b. Image constraints per form (third factor)
+    if image_constraint.get('enabled', False) and 'has_image' in df.columns:
+        image_indices = df.index[df['has_image'].astype(int) == 1].tolist()
+        image_min = image_constraint.get('min', 0)
+        image_max = image_constraint.get('max', 0)
+        
+        for form_idx in range(n_forms):
+            if image_min > 0:
+                prob += lpSum(item_vars[(idx, form_idx)] for idx in image_indices) >= image_min
+            
+            if image_max > 0 and image_max < test_length:
+                prob += lpSum(item_vars[(idx, form_idx)] for idx in image_indices) <= image_max
 
     # 3. Rasch B category constraints per form
     if raschb_item_indices:
@@ -551,6 +598,32 @@ def assemble_forms_with_cbc(
                 prob += tif_low >= min_tif * 0.5
                 prob += tif_high >= min_tif * 0.5
 
+                if eval_points.get('tcc_enabled'):
+                    tcc_mid_target = eval_points.get('tcc_mid', 0.0)
+                    tcc_tol = eval_points.get('tcc_tolerance', 0.5)
+
+                    if tcc_mid_target is not None and tcc_mid_target > 0:
+                        tcc_mid_val = lpSum(
+                            rasch_probability(theta_mid, _safe_float(df.at[item_idx, 'rasch_b'])) * item_vars[(item_idx, form_idx)]
+                            for item_idx in range(n_items)
+                        )
+                        prob += tcc_mid_val >= tcc_mid_target - tcc_tol
+                        prob += tcc_mid_val <= tcc_mid_target + tcc_tol
+
+                if eval_points.get('mean_rasch_enabled'):
+                    mean_rasch_target = eval_points.get('mean_rasch_target')
+                    mean_rasch_tolerance = eval_points.get('mean_rasch_tolerance', 0.2)
+
+                    if mean_rasch_target is not None:
+                        avg_b = (
+                            lpSum(
+                                _safe_float(df.at[item_idx, 'rasch_b']) * item_vars[(item_idx, form_idx)]
+                                for item_idx in range(n_items)
+                            ) / test_length
+                        )
+                        prob += avg_b >= mean_rasch_target - mean_rasch_tolerance
+                        prob += avg_b <= mean_rasch_target + mean_rasch_tolerance
+
     # 11. IRT TIF/TCC targets per form
     if not use_ctt_mode and approach == 'IRT (Rasch)' and eval_points and tif_tolerance_cfg:
         tif_tol = tif_tolerance_cfg.get('tif', 1.5)
@@ -621,6 +694,21 @@ def assemble_forms_with_cbc(
 
                     prob += tcc_mid_val >= tcc_mid_target - tcc_tol
                     prob += tcc_mid_val <= tcc_mid_target + tcc_tol
+
+            # Apply mean Rasch difficulty constraint if enabled
+            if eval_points.get('mean_rasch_enabled'):
+                mean_rasch_target = eval_points.get('mean_rasch_target')
+                mean_rasch_tolerance = eval_points.get('mean_rasch_tolerance', 0.2)
+
+                if mean_rasch_target is not None:
+                    avg_b = (
+                        lpSum(
+                            _safe_float(df.at[item_idx, 'rasch_b']) * item_vars[(item_idx, form_idx)]
+                            for item_idx in range(n_items)
+                        ) / test_length
+                    )
+                    prob += avg_b >= mean_rasch_target - mean_rasch_tolerance
+                    prob += avg_b <= mean_rasch_target + mean_rasch_tolerance
 
     # 12. Enemy item constraints per form
     if enemy_check:
@@ -781,13 +869,13 @@ def evaluate_form(items_df: pd.DataFrame, config: Dict[str, Any]) -> Dict[str, A
         'mean_difficulty': mean_difficulty,
         'sd_difficulty': sd_difficulty,
         'mean_discrimination': items_df['point_biserial'].mean(),
-        'domain_counts': items_df['domain'].value_counts().to_dict()
+        'domain_counts': items_df['domain'].value_counts().sort_index().to_dict()
     }
 
     if 'raschb_cat' in items_df.columns:
-        stats['raschb_cat_counts'] = items_df['raschb_cat'].value_counts().to_dict()
+        stats['raschb_cat_counts'] = items_df['raschb_cat'].value_counts().sort_index().to_dict()
     
-    # Evaluation at specific points if provided
+    # Evaluation at specific points if provided - use EXACT theta values
     if config.get('eval_points'):
         eval_points = config['eval_points']
         
@@ -795,9 +883,9 @@ def evaluate_form(items_df: pd.DataFrame, config: Dict[str, Any]) -> Dict[str, A
                                       ('mid', eval_points.get('theta_mid')), 
                                       ('high', eval_points.get('theta_high'))]:
             if theta_val is not None:
-                idx = np.argmin(np.abs(theta_range - theta_val))
-                stats[f'tif_at_{point_name}'] = tif_values[idx]
-                stats[f'tcc_at_{point_name}'] = tcc_values[idx]
+                # Calculate at exact theta value instead of nearest discrete point
+                stats[f'tif_at_{point_name}'] = calculate_tif(theta_val, b_params)
+                stats[f'tcc_at_{point_name}'] = calculate_tcc(theta_val, b_params)
     
     return stats
 
@@ -898,16 +986,16 @@ def display_form_results(form_data: Dict[str, Any], eval_points: Dict, common_it
     # Domain distribution
     st.subheader("📚 Domain Distribution")
     domain_df = pd.DataFrame({
-        'Domain': list(stats['domain_counts'].keys()),
-        'Count': list(stats['domain_counts'].values())
+        'Domain': sorted(stats['domain_counts'].keys()),
+        'Count': [stats['domain_counts'][k] for k in sorted(stats['domain_counts'].keys())]
     })
     st.dataframe(domain_df, use_container_width=True, hide_index=True)
 
     if stats.get('raschb_cat_counts'):
         st.subheader("🏷️ Rasch B Category Distribution")
         raschb_df = pd.DataFrame({
-            'Rasch B Category': list(stats['raschb_cat_counts'].keys()),
-            'Count': list(stats['raschb_cat_counts'].values())
+            'Rasch B Category': sorted(stats['raschb_cat_counts'].keys()),
+            'Count': [stats['raschb_cat_counts'][k] for k in sorted(stats['raschb_cat_counts'].keys())]
         })
         st.dataframe(raschb_df, use_container_width=True, hide_index=True)
     
@@ -927,8 +1015,8 @@ def display_form_results(form_data: Dict[str, Any], eval_points: Dict, common_it
     with col3:
         st.metric("Enemy Check", "✅ Enabled" if enemy_check else "⭕ Disabled")
         if not use_ctt_mode and tif_at_cut is not None:
-            st.metric(f"TIF @ θ={theta_cut:.1f}", f"{tif_at_cut:.2f}")
-            st.metric(f"TCC @ θ={theta_cut:.1f}", f"{tcc_at_cut:.2f}")
+            st.metric(f"TIF @ θ={theta_cut:.3f}", f"{tif_at_cut:.2f}")
+            st.metric(f"TCC @ θ={theta_cut:.3f}", f"{tcc_at_cut:.2f}")
     
     # Additional TIF/TCC values at ±1 (skip in CTT mode)
     if not use_ctt_mode and tif_at_cut is not None:
@@ -937,12 +1025,12 @@ def display_form_results(form_data: Dict[str, Any], eval_points: Dict, common_it
             add_col1, add_col2 = st.columns(2)
             with add_col1:
                 if form_data.get('tif_at_low') is not None:
-                    st.metric(f"TIF @ θ={theta_cut-1:.1f}", f"{form_data['tif_at_low']:.2f}")
-                    st.metric(f"TCC @ θ={theta_cut-1:.1f}", f"{form_data['tcc_at_low']:.2f}")
+                    st.metric(f"TIF @ θ={theta_cut-1:.3f}", f"{form_data['tif_at_low']:.2f}")
+                    st.metric(f"TCC @ θ={theta_cut-1:.3f}", f"{form_data['tcc_at_low']:.2f}")
             with add_col2:
                 if form_data.get('tif_at_high') is not None:
-                    st.metric(f"TIF @ θ={theta_cut+1:.1f}", f"{form_data['tif_at_high']:.2f}")
-                    st.metric(f"TCC @ θ={theta_cut+1:.1f}", f"{form_data['tcc_at_high']:.2f}")
+                    st.metric(f"TIF @ θ={theta_cut+1:.3f}", f"{form_data['tif_at_high']:.2f}")
+                    st.metric(f"TCC @ θ={theta_cut+1:.3f}", f"{form_data['tcc_at_high']:.2f}")
 
 # ==================== Main Application ====================
 
@@ -957,7 +1045,7 @@ def main():
     uploaded_file = st.file_uploader(
         "Choose CSV or Excel file",
         type=['csv', 'xlsx', 'xls'],
-        help="Required columns: item_id, domain, rasch_b, pvalue, point_biserial. Optional: raschb_cat, enemy_ids"
+        help="Required columns: item_id, domain, rasch_b, pvalue, point_biserial. Optional: raschb_cat, enemy_ids, has_image"
     )
     
     if uploaded_file is None:
@@ -972,7 +1060,8 @@ def main():
                 'pvalue': [0.62, 0.75, 0.55, 0.68, 0.60],
                 'point_biserial': [0.35, 0.42, 0.38, 0.40, 0.36],
                 'raschb_cat': ['6. hard', '3. easy', '6. hard', '4. moderately easy', '6. hard'],
-                'enemy_ids': ['NCX0002', '', 'NCX0004', 'NCX0003', '']
+                'enemy_ids': ['NCX0002', '', 'NCX0004', 'NCX0003', ''],
+                'has_image': [1, 0, 1, 1, 0]
             })
             st.dataframe(example_df)
             
@@ -1078,6 +1167,48 @@ def main():
         max_val_raw = int(row['Max']) if pd.notna(row['Max']) else min_val
         max_val = max(min_val, min(max_val_raw, test_length))
         domain_constraints[domain] = {'min': min_val, 'max': max_val}
+
+    st.sidebar.divider()
+    
+    # Image constraint (third factor)
+    st.sidebar.subheader("🖼️ Image Constraint")
+    st.sidebar.caption("Control items with images/figures (has_image column: 0 or 1). Set max to enable.")
+    
+    image_constraint = {'min': 0, 'max': 0, 'enabled': False}
+    if 'has_image' in items_df.columns:
+        # Count items with images
+        items_with_image = items_df['has_image'].astype(int).sum()
+        st.sidebar.info(f"📊 Items with images: {items_with_image} / {len(items_df)}")
+        
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            image_min = st.number_input(
+                "Min Items with Images",
+                min_value=0,
+                max_value=test_length if test_length > 0 else 100,
+                value=0,
+                step=1,
+                help="Minimum number of items with images (requires max to be set)"
+            )
+        with col2:
+            image_max = st.number_input(
+                "Max Items with Images",
+                min_value=0,
+                max_value=test_length if test_length > 0 else 100,
+                value=0,
+                step=1,
+                help="Maximum number of items with images (0 = no constraint)"
+            )
+        
+        image_constraint = {
+            'min': image_min,
+            'max': image_max,
+            'enabled': image_max > 0
+        }
+    else:
+        st.sidebar.warning("⚠️ Column 'has_image' not found. Image constraints disabled.")
+    
+    st.sidebar.divider()
 
     # Rasch B category distribution - tidy layout
     raschb_cat_constraints = {}
@@ -1207,17 +1338,59 @@ def main():
         st.sidebar.subheader("📐 Logit Cut")
         logit_cut = st.sidebar.number_input(
             "Logit Cut (θ)",
-            -3.0, 3.0, 0.0, 0.1,
-            help="Objective: Maximize test information at this θ value"
+            -3.0, 3.0, 0.0, 0.001,
+            help="Objective: Maximize test information at this θ value",
+            format="%.3f"
         )
-        
+
         tolerance = st.sidebar.number_input(
             "Tolerance (±)",
             0.0, 10.0, 0.2, 0.1,
-            help="Minimum TIF acceptable at logit cut ± this range",
+            help="Apply the minimum TIF requirement around the logit cut (θ ± tolerance)",
             key="base_form_tolerance"
         )
+
+        st.sidebar.markdown("**Optional Constraints**")
         
+        enable_tcc_cut = st.sidebar.checkbox(
+            "Enable TCC at Logit Cut",
+            value=False,
+            help="Add a TCC constraint at the logit cut"
+        )
+
+        tcc_mid = None
+        tcc_tolerance = None
+        if enable_tcc_cut:
+            tcc_mid = st.sidebar.number_input(
+                f"TCC @ {logit_cut:.3f}",
+                0.0, float(test_length), 0.0, 1.0,
+                help="Target expected score at the logit cut"
+            )
+            tcc_tolerance = st.sidebar.number_input(
+                "TCC Tolerance (±)",
+                0.1, 20.0, 0.5, 0.1,
+                help="Allowed deviation from the TCC target"
+            )
+
+        enable_mean_rasch = st.sidebar.checkbox(
+            "Enable Mean Rasch B",
+            value=False,
+            help="Add a mean Rasch difficulty constraint"
+        )
+        mean_rasch_target = None
+        mean_rasch_tolerance = None
+        if enable_mean_rasch:
+            mean_rasch_target = st.sidebar.number_input(
+                "Mean Rasch B Target",
+                -3.0, 3.0, 0.0, 0.01,
+                help="Target mean Rasch difficulty for the form"
+            )
+            mean_rasch_tolerance = st.sidebar.number_input(
+                "Mean Rasch B Tolerance (±)",
+                0.0, 2.0, 0.2, 0.05,
+                help="Allowed deviation from the mean Rasch target"
+            )
+
         st.sidebar.info("🎯 Objective: Max test information at logit cut")
 
         # Store in eval_points for consistency, including -1 and +1 points
@@ -1225,13 +1398,19 @@ def main():
             'theta_low': logit_cut - 1.0,
             'theta_mid': logit_cut,
             'theta_high': logit_cut + 1.0,
-            'tolerance': tolerance
+            'tolerance': tolerance,
+            'tcc_enabled': enable_tcc_cut,
+            'tcc_mid': tcc_mid,
+            'tcc_tolerance': tcc_tolerance,
+            'mean_rasch_enabled': enable_mean_rasch,
+            'mean_rasch_target': mean_rasch_target,
+            'mean_rasch_tolerance': mean_rasch_tolerance
         }
 
     # IRT (Rasch) with full evaluation points
     elif approach == 'IRT (Rasch)':
         st.sidebar.subheader("📐 IRT (Rasch) Evaluation Points")
-        logit_cut = st.sidebar.number_input("Logit Cut (θ)", -3.0, 3.0, 0.0, 0.1)
+        logit_cut = st.sidebar.number_input("Logit Cut (θ)", -3.0, 3.0, 0.0, 0.001, format="%.3f")
         
         tolerance = st.sidebar.number_input(
             "Tolerance (±)",
@@ -1241,27 +1420,27 @@ def main():
         )
         
         evaluation_points = [logit_cut - 1.0, logit_cut, logit_cut + 1.0]
-        st.sidebar.markdown(f"**Points:** {evaluation_points[0]:.1f}, {evaluation_points[1]:.1f}, {evaluation_points[2]:.1f}")
+        st.sidebar.markdown(f"**Points:** {evaluation_points[0]:.3f}, {evaluation_points[1]:.3f}, {evaluation_points[2]:.3f}")
         
         # TIF Targets
         st.sidebar.markdown("**TIF Targets:**")
         col1, col2, col3 = st.sidebar.columns(3)
         with col1:
-            tif_low = st.number_input(f"TIF @ {evaluation_points[0]:.1f}", 0.0, 50.0, 0.0, 0.5, key="tif_low", help="(0 = no constraint)")
+            tif_low = st.number_input(f"TIF @ {evaluation_points[0]:.3f}", 0.0, 50.0, 0.0, 0.5, key="tif_low", help="(0 = no constraint)")
         with col2:
-            tif_mid = st.number_input(f"TIF @ {evaluation_points[1]:.1f}", 0.0, 50.0, 0.0, 0.5, key="tif_mid", help="(0 = no constraint)")
+            tif_mid = st.number_input(f"TIF @ {evaluation_points[1]:.3f}", 0.0, 50.0, 0.0, 0.5, key="tif_mid", help="(0 = no constraint)")
         with col3:
-            tif_high = st.number_input(f"TIF @ {evaluation_points[2]:.1f}", 0.0, 50.0, 0.0, 0.5, key="tif_high", help="(0 = no constraint)")
+            tif_high = st.number_input(f"TIF @ {evaluation_points[2]:.3f}", 0.0, 50.0, 0.0, 0.5, key="tif_high", help="(0 = no constraint)")
         
         # TCC Targets
         st.sidebar.markdown("**TCC Targets (Expected Score):**")
         col1, col2, col3 = st.sidebar.columns(3)
         with col1:
-            tcc_low = st.number_input(f"TCC @ {evaluation_points[0]:.1f}", 0.0, float(test_length), 0.0, 1.0, key="tcc_low", help="(0 = no constraint)")
+            tcc_low = st.number_input(f"TCC @ {evaluation_points[0]:.3f}", 0.0, float(test_length), 0.0, 1.0, key="tcc_low", help="(0 = no constraint)")
         with col2:
-            tcc_mid = st.number_input(f"TCC @ {evaluation_points[1]:.1f}", 0.0, float(test_length), 0.0, 1.0, key="tcc_mid", help="(0 = no constraint)")
+            tcc_mid = st.number_input(f"TCC @ {evaluation_points[1]:.3f}", 0.0, float(test_length), 0.0, 1.0, key="tcc_mid", help="(0 = no constraint)")
         with col3:
-            tcc_high = st.number_input(f"TCC @ {evaluation_points[2]:.1f}", 0.0, float(test_length), 0.0, 1.0, key="tcc_high", help="(0 = no constraint)")
+            tcc_high = st.number_input(f"TCC @ {evaluation_points[2]:.3f}", 0.0, float(test_length), 0.0, 1.0, key="tcc_high", help="(0 = no constraint)")
         
         # Tolerances
         st.sidebar.markdown("**Tolerances:**")
@@ -1270,6 +1449,30 @@ def main():
             tif_tolerance = st.number_input("TIF Tolerance (±)", 0.1, 10.0, 0.2, 0.1)
         with tol_col2:
             tcc_tolerance = st.number_input("TCC Tolerance (±)", 0.1, 20.0, 1.0, 0.5)
+        
+        # Mean Rasch Difficulty constraint
+        st.sidebar.divider()
+        st.sidebar.markdown("**Optional Constraint**")
+        
+        enable_mean_rasch_irt = st.sidebar.checkbox(
+            "Enable Mean Rasch Difficulty",
+            value=False,
+            help="Add a mean Rasch difficulty constraint"
+        )
+        
+        mean_rasch_irt_target = None
+        mean_rasch_irt_tolerance = None
+        if enable_mean_rasch_irt:
+            mean_rasch_irt_target = st.sidebar.number_input(
+                "Mean Rasch B Target",
+                -3.0, 3.0, 0.0, 0.01,
+                help="Target mean Rasch difficulty for the form"
+            )
+            mean_rasch_irt_tolerance = st.sidebar.number_input(
+                "Mean Rasch B Tolerance (±)",
+                0.0, 2.0, 0.2, 0.05,
+                help="Allowed deviation from the mean Rasch target"
+            )
         
         eval_points = {
             'theta_low': evaluation_points[0],
@@ -1281,7 +1484,10 @@ def main():
             'tcc_low': tcc_low,
             'tcc_mid': tcc_mid,
             'tcc_high': tcc_high,
-            'tolerance': tolerance
+            'tolerance': tolerance,
+            'mean_rasch_enabled': enable_mean_rasch_irt,
+            'mean_rasch_target': mean_rasch_irt_target,
+            'mean_rasch_tolerance': mean_rasch_irt_tolerance
         }
 
     # CTT Approach (when not using CTT mode checkbox)
@@ -1351,6 +1557,22 @@ def main():
             if total_cat_max < test_length:
                 validation_errors.append(f"❌ Rasch B category maximums sum to {total_cat_max}, less than test length {test_length}")
         
+        # Check image constraint
+        if 'has_image' in items_df.columns:
+            # Error: min set but max not set
+            if image_constraint['min'] > 0 and image_constraint['max'] == 0:
+                validation_errors.append(f"❌ Image minimum is set ({image_constraint['min']}) but maximum is 0. Set max > 0 to enable constraint.")
+            
+            # Validate if constraint is enabled
+            if image_constraint['enabled']:
+                items_with_images = items_df['has_image'].astype(int).sum()
+                if image_constraint['min'] > items_with_images:
+                    validation_errors.append(f"❌ Image minimum ({image_constraint['min']}) exceeds available items with images ({items_with_images})")
+                if image_constraint['min'] > test_length:
+                    validation_errors.append(f"❌ Image minimum ({image_constraint['min']}) exceeds test length ({test_length})")
+                if image_constraint['max'] < image_constraint['min']:
+                    validation_errors.append(f"❌ Image maximum ({image_constraint['max']}) less than minimum ({image_constraint['min']})")
+        
         # Check if enough items meet quality thresholds (CTT only)
         if use_ctt_mode or approach == 'CTT':
             if discrimination_min > 0:
@@ -1374,6 +1596,7 @@ def main():
                 'approach': approach,
                 'domain_constraints': domain_constraints,
                 'raschb_cat_constraints': raschb_cat_constraints,
+                'image_constraint': image_constraint,
                 'use_ctt_mode': use_ctt_mode,
                 'eval_points': eval_points,
                 'tif_tolerance': {'tif': tif_tolerance, 'tcc': tcc_tolerance} if tif_tolerance else None,
@@ -1422,34 +1645,20 @@ def main():
                             # Get selected items
                             selected_df = items_df[items_df['item_id'].isin(selected_ids)].copy()
                             
-                            # Evaluate form
+                            # Evaluate form (now computes exact TIF/TCC at eval points)
                             stats = evaluate_form(selected_df, config)
                             alpha = estimate_cronbachs_alpha(selected_df)
                             
-                            # Calculate TIF/TCC at evaluation points
+                            # Extract exact TIF/TCC values computed by evaluate_form
                             if eval_points:
                                 theta_cut = eval_points['theta_mid']
-                                idx_cut = np.argmin(np.abs(stats['theta_range'] - theta_cut))
-                                tif_at_cut = stats['tif_values'][idx_cut]
-                                tcc_at_cut = stats['tcc_values'][idx_cut]
-                                
-                                # Also calculate at -1 and +1 if available
-                                tif_at_low = None
-                                tcc_at_low = None
-                                tif_at_high = None
-                                tcc_at_high = None
-                                
-                                if 'theta_low' in eval_points:
-                                    theta_low = eval_points['theta_low']
-                                    idx_low = np.argmin(np.abs(stats['theta_range'] - theta_low))
-                                    tif_at_low = stats['tif_values'][idx_low]
-                                    tcc_at_low = stats['tcc_values'][idx_low]
-                                
-                                if 'theta_high' in eval_points:
-                                    theta_high = eval_points['theta_high']
-                                    idx_high = np.argmin(np.abs(stats['theta_range'] - theta_high))
-                                    tif_at_high = stats['tif_values'][idx_high]
-                                    tcc_at_high = stats['tcc_values'][idx_high]
+                                # Use exact values computed at precise theta points (not approximated)
+                                tif_at_cut = stats.get('tif_at_mid')
+                                tcc_at_cut = stats.get('tcc_at_mid')
+                                tif_at_low = stats.get('tif_at_low')
+                                tcc_at_low = stats.get('tcc_at_low')
+                                tif_at_high = stats.get('tif_at_high')
+                                tcc_at_high = stats.get('tcc_at_high')
                             else:
                                 tif_at_cut = None
                                 tcc_at_cut = None
@@ -1541,11 +1750,25 @@ def main():
             
             # Add vertical line at logit cut (for Base Form or IRT)
             if eval_points.get('theta_mid') is not None:
+                # Calculate average TIF at logit cut across all forms
+                tif_values_at_cut = []
+                for form_data in all_forms:
+                    if form_data.get('tif_at_cut') is not None:
+                        tif_values_at_cut.append(form_data['tif_at_cut'])
+                
+                avg_tif = sum(tif_values_at_cut) / len(tif_values_at_cut) if tif_values_at_cut else None
+                
+                # Format annotation with TIF value
+                if avg_tif is not None:
+                    annotation_text = f"Logit Cut ({eval_points.get('theta_mid'):.3f}, TIF: {avg_tif:.2f})"
+                else:
+                    annotation_text = f"Logit Cut ({eval_points.get('theta_mid'):.3f})"
+                
                 fig_tif_all.add_vline(
                     x=eval_points.get('theta_mid'),
                     line_dash="dash",
                     line_color="red",
-                    annotation_text=f"Logit Cut ({eval_points.get('theta_mid'):.1f})",
+                    annotation_text=annotation_text,
                     annotation_position="top right"
                 )
             
@@ -1574,17 +1797,40 @@ def main():
                     line=dict(color=color, width=2)
                 ))
             
-            # Add TCC target markers
-            tcc_targets = [eval_points.get('tcc_low'), eval_points.get('tcc_mid'), eval_points.get('tcc_high')]
-            
-            if any(t is not None for t in tcc_targets):
+            # Add TCC target marker ONLY at logit cut (theta_mid)
+            tcc_mid_target = eval_points.get('tcc_mid')
+            if tcc_mid_target is not None and tcc_mid_target > 0:
                 fig_tcc_all.add_trace(go.Scatter(
-                    x=[t for t in thetas if t is not None],
-                    y=[tgt for tgt in tcc_targets if tgt is not None],
+                    x=[eval_points.get('theta_mid')],
+                    y=[tcc_mid_target],
                     mode='markers',
                     name='Targets',
                     marker=dict(size=12, color='black', symbol='diamond')
                 ))
+            
+            # Add vertical line at logit cut with TCC value
+            if eval_points.get('theta_mid') is not None:
+                # Calculate average TCC at logit cut across all forms
+                tcc_values_at_cut = []
+                for form_data in all_forms:
+                    if form_data.get('tcc_at_cut') is not None:
+                        tcc_values_at_cut.append(form_data['tcc_at_cut'])
+                
+                avg_tcc = sum(tcc_values_at_cut) / len(tcc_values_at_cut) if tcc_values_at_cut else None
+                
+                # Format annotation with TCC value
+                if avg_tcc is not None:
+                    annotation_text = f"Logit Cut ({eval_points.get('theta_mid'):.3f}, TCC: {avg_tcc:.2f})"
+                else:
+                    annotation_text = f"Logit Cut ({eval_points.get('theta_mid'):.3f})"
+                
+                fig_tcc_all.add_vline(
+                    x=eval_points.get('theta_mid'),
+                    line_dash="dash",
+                    line_color="red",
+                    annotation_text=annotation_text,
+                    annotation_position="top right"
+                )
             
             fig_tcc_all.update_layout(
                 title="Test Characteristic Curve (TCC) - All Forms",
@@ -1633,17 +1879,17 @@ def main():
                 }
                 
                 if not use_ctt_mode and tif_at_cut is not None:
-                    row[f'TIF @ θ={theta_cut:.1f}'] = f"{tif_at_cut:.2f}"
-                    row[f'TCC @ θ={theta_cut:.1f}'] = f"{tcc_at_cut:.2f}"
+                    row[f'TIF @ θ={theta_cut:.3f}'] = f"{tif_at_cut:.2f}"
+                    row[f'TCC @ θ={theta_cut:.3f}'] = f"{tcc_at_cut:.2f}"
                     
                     # Add -1 and +1 values if available (Base Form)
                     if form_data.get('tif_at_low') is not None:
-                        row[f'TIF @ θ={theta_cut-1:.1f}'] = f"{form_data['tif_at_low']:.2f}"
-                        row[f'TCC @ θ={theta_cut-1:.1f}'] = f"{form_data['tcc_at_low']:.2f}"
+                        row[f'TIF @ θ={theta_cut-1:.3f}'] = f"{form_data['tif_at_low']:.2f}"
+                        row[f'TCC @ θ={theta_cut-1:.3f}'] = f"{form_data['tcc_at_low']:.2f}"
                     
                     if form_data.get('tif_at_high') is not None:
-                        row[f'TIF @ θ={theta_cut+1:.1f}'] = f"{form_data['tif_at_high']:.2f}"
-                        row[f'TCC @ θ={theta_cut+1:.1f}'] = f"{form_data['tcc_at_high']:.2f}"
+                        row[f'TIF @ θ={theta_cut+1:.3f}'] = f"{form_data['tif_at_high']:.2f}"
+                        row[f'TCC @ θ={theta_cut+1:.3f}'] = f"{form_data['tcc_at_high']:.2f}"
                 
                 comparison_rows.append(row)
             
@@ -1691,16 +1937,16 @@ def main():
                 }
                 
                 if not use_ctt_mode and tif_at_cut is not None:
-                    summary_data['Metric'].extend([f'TIF @ θ={theta_cut:.1f}', f'TCC @ θ={theta_cut:.1f}'])
+                    summary_data['Metric'].extend([f'TIF @ θ={theta_cut:.3f}', f'TCC @ θ={theta_cut:.3f}'])
                     summary_data['Value'].extend([f"{tif_at_cut:.2f}", f"{tcc_at_cut:.2f}"])
                     
                     # Add -1 and +1 values if available (Base Form)
                     if form_data.get('tif_at_low') is not None:
-                        summary_data['Metric'].extend([f'TIF @ θ={theta_cut-1:.1f}', f'TCC @ θ={theta_cut-1:.1f}'])
+                        summary_data['Metric'].extend([f'TIF @ θ={theta_cut-1:.3f}', f'TCC @ θ={theta_cut-1:.3f}'])
                         summary_data['Value'].extend([f"{form_data['tif_at_low']:.2f}", f"{form_data['tcc_at_low']:.2f}"])
                     
                     if form_data.get('tif_at_high') is not None:
-                        summary_data['Metric'].extend([f'TIF @ θ={theta_cut+1:.1f}', f'TCC @ θ={theta_cut+1:.1f}'])
+                        summary_data['Metric'].extend([f'TIF @ θ={theta_cut+1:.3f}', f'TCC @ θ={theta_cut+1:.3f}'])
                         summary_data['Value'].extend([f"{form_data['tif_at_high']:.2f}", f"{form_data['tcc_at_high']:.2f}"])
                 
                 # Add domain counts
@@ -1709,9 +1955,9 @@ def main():
                 summary_data['Metric'].append('Domain Distribution')
                 summary_data['Value'].append('')
                 
-                for domain, count in stats['domain_counts'].items():
+                for domain in sorted(stats['domain_counts'].keys()):
                     summary_data['Metric'].append(f"  {domain}")
-                    summary_data['Value'].append(str(count))
+                    summary_data['Value'].append(str(stats['domain_counts'][domain]))
 
                 if stats.get('raschb_cat_counts'):
                     summary_data['Metric'].append('')  # Blank row
@@ -1719,9 +1965,9 @@ def main():
                     summary_data['Metric'].append('Rasch B Category Distribution')
                     summary_data['Value'].append('')
 
-                    for cat, count in stats['raschb_cat_counts'].items():
+                    for cat in sorted(stats['raschb_cat_counts'].keys()):
                         summary_data['Metric'].append(f"  {cat}")
-                        summary_data['Value'].append(str(count))
+                        summary_data['Value'].append(str(stats['raschb_cat_counts'][cat]))
                 
                 summary_df = pd.DataFrame(summary_data)
                 summary_df.to_excel(writer, sheet_name=f'Form_{form_num}_Summary', index=False)
