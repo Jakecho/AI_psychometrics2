@@ -30,58 +30,97 @@ def uirt_3pl_prob(theta, a, b, g, D=1.702):
     z = D * a * (theta - b)
     return g + (1 - g) / (1 + np.exp(-z))
 
-def generate_form_parameters(form_type="base", n_items=50):
+def generate_form_parameters(form_type="base", n_items=50, params_config=None):
     """
     Generates item parameters based on MC-I simulation study conditions (Table 2).
+    
+    Args:
+        form_type: "base", "same_rc", or "diff_rc"
+        n_items: Number of items
+        params_config: Dict with custom parameter distributions. Keys:
+                      - "base_a1_min", "base_a1_max", "base_a2_min", "base_a2_max", "base_d_min", "base_d_max", etc.
     """
     np.random.seed(42)
     
-    # g is common: Beta(5, 17)
-    g = np.random.beta(5, 17, n_items)
+    # Default configurations
+    defaults = {
+        "base_a1_min": 0.57, "base_a1_max": 1.14,
+        "base_a2_min": 0.57, "base_a2_max": 1.14,
+        "base_d_min": -1.5, "base_d_max": 1.5,
+        
+        "same_rc_a1_c1_min": 0.57, "same_rc_a1_c1_max": 1.14,
+        "same_rc_a2_c1_min": 0.98, "same_rc_a2_c1_max": 1.95,
+        "same_rc_a1_c2_min": 0.98, "same_rc_a1_c2_max": 1.95,
+        "same_rc_a2_c2_min": 0.57, "same_rc_a2_c2_max": 1.14,
+        "same_rc_d_min": -0.95, "same_rc_d_max": 1.5,
+        
+        "diff_rc_a1_c1_min": 0.26, "diff_rc_a1_c1_max": 0.57,
+        "diff_rc_a2_c1_min": 0.78, "diff_rc_a2_c1_max": 1.57,
+        "diff_rc_a1_c2_min": 0.78, "diff_rc_a1_c2_max": 1.57,
+        "diff_rc_a2_c2_min": 0.66, "diff_rc_a2_c2_max": 1.31,
+        "diff_rc_d_min": -0.95, "diff_rc_d_max": 1.5,
+        
+        "g_alpha": 5, "g_beta": 17
+    }
+    
+    # Merge with custom config
+    if params_config is not None:
+        defaults.update(params_config)
+    
+    # g is common: Beta(alpha, beta)
+    g = np.random.beta(defaults["g_alpha"], defaults["g_beta"], n_items)
     
     if form_type == "base":
-        # Base Form (Y)
-        # a1, a2 ~ U(0.57, 1.14)
-        # d ~ U(-1.5, 1.5)
-        a1 = np.random.uniform(0.57, 1.14, n_items)
-        a2 = np.random.uniform(0.57, 1.14, n_items)
-        d = np.random.uniform(-1.5, 1.5, n_items)
+        a1 = np.random.uniform(defaults["base_a1_min"], defaults["base_a1_max"], n_items)
+        a2 = np.random.uniform(defaults["base_a2_min"], defaults["base_a2_max"], n_items)
+        d = np.random.uniform(defaults["base_d_min"], defaults["base_d_max"], n_items)
         
     elif form_type == "same_rc":
-        # Same Reference Composite (New Form X - Condition 2)
-        # d ~ U(-0.95, 1.5) (More difficult)
-        d = np.random.uniform(-0.95, 1.5, n_items)
+        d = np.random.uniform(defaults["same_rc_d_min"], defaults["same_rc_d_max"], n_items)
         
         n_half = n_items // 2
-        # Cluster 1 (1-25): a1 ~ U(0.57, 1.14), a2 ~ U(0.98, 1.95)
-        # Note: Table 2 values.
-        a1_c1 = np.random.uniform(0.57, 1.14, n_half)
-        a2_c1 = np.random.uniform(0.98, 1.95, n_half)
+        a1_c1 = np.random.uniform(defaults["same_rc_a1_c1_min"], defaults["same_rc_a1_c1_max"], n_half)
+        a2_c1 = np.random.uniform(defaults["same_rc_a2_c1_min"], defaults["same_rc_a2_c1_max"], n_half)
         
-        # Cluster 2 (26-50): a1 ~ U(0.98, 1.95), a2 ~ U(0.57, 1.14)
-        a1_c2 = np.random.uniform(0.98, 1.95, n_items - n_half)
-        a2_c2 = np.random.uniform(0.57, 1.14, n_items - n_half)
+        a1_c2 = np.random.uniform(defaults["same_rc_a1_c2_min"], defaults["same_rc_a1_c2_max"], n_items - n_half)
+        a2_c2 = np.random.uniform(defaults["same_rc_a2_c2_min"], defaults["same_rc_a2_c2_max"], n_items - n_half)
         
         a1 = np.concatenate([a1_c1, a1_c2])
         a2 = np.concatenate([a2_c1, a2_c2])
         
     elif form_type == "diff_rc":
-        # Different Reference Composite (New Form X - Condition 3)
-        # d ~ U(-0.95, 1.5)
-        d = np.random.uniform(-0.95, 1.5, n_items)
+        d = np.random.uniform(defaults["diff_rc_d_min"], defaults["diff_rc_d_max"], n_items)
         
         n_half = n_items // 2
-        # Cluster 1 (1-25): a1 ~ U(0.26, 0.57), a2 ~ U(0.78, 1.57)
-        a1_c1 = np.random.uniform(0.26, 0.57, n_half)
-        a2_c1 = np.random.uniform(0.78, 1.57, n_half)
+        a1_c1 = np.random.uniform(defaults["diff_rc_a1_c1_min"], defaults["diff_rc_a1_c1_max"], n_half)
+        a2_c1 = np.random.uniform(defaults["diff_rc_a2_c1_min"], defaults["diff_rc_a2_c1_max"], n_half)
         
-        # Cluster 2 (26-50): a1 ~ U(0.78, 1.57), a2 ~ U(0.66, 1.31)
-        a1_c2 = np.random.uniform(0.78, 1.57, n_items - n_half)
-        a2_c2 = np.random.uniform(0.66, 1.31, n_items - n_half)
+        a1_c2 = np.random.uniform(defaults["diff_rc_a1_c2_min"], defaults["diff_rc_a1_c2_max"], n_items - n_half)
+        a2_c2 = np.random.uniform(defaults["diff_rc_a2_c2_min"], defaults["diff_rc_a2_c2_max"], n_items - n_half)
         
         a1 = np.concatenate([a1_c1, a1_c2])
         a2 = np.concatenate([a2_c1, a2_c2])
     
+    return pd.DataFrame({'a1': a1, 'a2': a2, 'd': d, 'g': g})
+
+def generate_form_parameters_lognormal(
+    n_items,
+    a1_mu,
+    a1_sigma,
+    a2_mu,
+    a2_sigma,
+    d_mu,
+    d_sigma,
+    g_alpha,
+    g_beta,
+    seed=None
+):
+    """Generate item parameters using lognormal a's, normal d, and beta g."""
+    rng = np.random.default_rng(seed)
+    a1 = rng.lognormal(mean=a1_mu, sigma=a1_sigma, size=n_items)
+    a2 = rng.lognormal(mean=a2_mu, sigma=a2_sigma, size=n_items)
+    d = rng.normal(loc=d_mu, scale=d_sigma, size=n_items)
+    g = rng.beta(a=g_alpha, b=g_beta, size=n_items)
     return pd.DataFrame({'a1': a1, 'a2': a2, 'd': d, 'g': g})
 
 def get_latent_params(group="reference"):
@@ -245,14 +284,26 @@ def run_mirt_ose(base_items, new_items, mu=None, cov=None):
     dist_base_marg = np.dot(dist_base_cond, weights)
     dist_new_marg = np.dot(dist_new_cond, weights)
     
+    # Normalize distributions
+    dist_base_marg = np.clip(dist_base_marg, 0, None)
+    dist_base_marg /= np.sum(dist_base_marg) if np.sum(dist_base_marg) > 0 else 1
+    dist_new_marg = np.clip(dist_new_marg, 0, None)
+    dist_new_marg /= np.sum(dist_new_marg) if np.sum(dist_new_marg) > 0 else 1
+    
     # Equipercentile Equating using interpolation
     pr_base = get_percentile_ranks(dist_base_marg)
     pr_new = get_percentile_ranks(dist_new_marg)
     
+    # Ensure PR values are properly bounded and sorted
+    pr_base = np.clip(pr_base, 0, 1)
+    pr_new = np.clip(pr_new, 0, 1)
+    
     scores = np.arange(len(dist_new_marg))
+    base_scores = np.arange(len(dist_base_marg))
     
     # Map New Score -> PR -> Base Score (via interpolation)
-    equated_scores = np.interp(pr_new, pr_base, scores)
+    # Handle boundaries: anchor PR=0 to min score and PR=1 to max score
+    equated_scores = np.interp(pr_new, pr_base, base_scores, left=base_scores[0], right=base_scores[-1])
         
     return scores, equated_scores
 
@@ -273,11 +324,24 @@ def run_uirt_ose(base_uirt, new_uirt):
     dist_base = np.dot(lord_wingersky_1d(get_probs(base_uirt)), weights)
     dist_new = np.dot(lord_wingersky_1d(get_probs(new_uirt)), weights)
     
+    # Normalize distributions
+    dist_base = np.clip(dist_base, 0, None)
+    dist_base /= np.sum(dist_base) if np.sum(dist_base) > 0 else 1
+    dist_new = np.clip(dist_new, 0, None)
+    dist_new /= np.sum(dist_new) if np.sum(dist_new) > 0 else 1
+    
     pr_base = get_percentile_ranks(dist_base)
     pr_new = get_percentile_ranks(dist_new)
     
+    # Ensure PR values are properly bounded
+    pr_base = np.clip(pr_base, 0, 1)
+    pr_new = np.clip(pr_new, 0, 1)
+    
     scores = np.arange(len(dist_new))
-    equated_scores = np.interp(pr_new, pr_base, scores)
+    base_scores = np.arange(len(dist_base))
+    
+    # Use boundary values for extrapolation
+    equated_scores = np.interp(pr_new, pr_base, base_scores, left=base_scores[0], right=base_scores[-1])
         
     return scores, equated_scores
 
@@ -293,20 +357,37 @@ def run_uirt_tse(base_uirt, new_uirt):
             t += uirt_3pl_prob(theta, i['a'], i['b'], i['g'])
         return t
     
+    # Pre-compute boundary TCC values
+    tcc_new_min = get_tcc(-6, new_uirt)
+    tcc_new_max = get_tcc(6, new_uirt)
+    tcc_base_min = get_tcc(-6, base_uirt)
+    tcc_base_max = get_tcc(6, base_uirt)
+    
     for s in scores:
         # 1. Find theta equivalent to score s on New Form
         # TCC_new(theta) - s = 0
         try:
-            theta_s = brentq(lambda t: get_tcc(t, new_uirt) - s, -6, 6)
-            # 2. Project theta to Base Form
-            s_y = get_tcc(theta_s, base_uirt)
+            # Check if score is within possible range
+            if s < tcc_new_min:
+                s_y = tcc_base_min
+            elif s > tcc_new_max:
+                s_y = tcc_base_max
+            else:
+                # Use root finding to find theta equivalent to score s
+                theta_s = brentq(lambda t: get_tcc(t, new_uirt) - s, -6, 6)
+                # 2. Project theta to Base Form
+                s_y = get_tcc(theta_s, base_uirt)
         except ValueError:
-            # Score outside possible range (e.g. sum of guessings)
-            s_y = s # Fallback or min/max
-            if s < get_tcc(-6, new_uirt): s_y = get_tcc(-6, base_uirt)
-            if s > get_tcc(6, new_uirt): s_y = get_tcc(6, base_uirt)
+            # Score outside possible range or root finding failed
+            if s <= tcc_new_min:
+                s_y = tcc_base_min
+            elif s >= tcc_new_max:
+                s_y = tcc_base_max
+            else:
+                # Linear interpolation as fallback
+                s_y = tcc_base_min + (s - tcc_new_min) * (tcc_base_max - tcc_base_min) / (tcc_new_max - tcc_new_min)
             
-        equated.append(s_y)
+        equated.append(np.clip(s_y, 0, len(base_uirt)))
     return scores, np.array(equated)
 
 def run_mirt_tse_approx(base_items, new_items, use_weights=True, mu=None, cov=None):
@@ -328,7 +409,7 @@ def run_mirt_tse_approx(base_items, new_items, use_weights=True, mu=None, cov=No
     a_new = new_items[['a1', 'a2']].values
     d_new = new_items['d'].values
     g_new = new_items['g'].values
-    
+
     a_base = base_items[['a1', 'a2']].values
     d_base = base_items['d'].values
     g_base = base_items['g'].values
@@ -577,27 +658,35 @@ def plot_tcc_surface(items, title="Test Characteristic Surface", items2=None, la
 
     z1 = get_z(items)
     
-    data = [go.Surface(z=z1, x=X, y=Y, colorscale='Blues', opacity=0.8, name="Base Form", showscale=False)]
+    data = [go.Surface(z=z1, x=X, y=Y, colorscale='Blues', opacity=0.85, name="Reference Form", 
+                       showscale=False, contours=dict(z=dict(show=True, width=2, color='darkblue')))]
     
     if items2 is not None:
         z2 = get_z(items2)
-        data.append(go.Surface(z=z2, x=X, y=Y, colorscale='Reds', opacity=0.7, name=label2, showscale=False))
+        data.append(go.Surface(z=z2, x=X, y=Y, colorscale='Reds', opacity=0.75, name=label2, 
+                              showscale=False, contours=dict(z=dict(show=True, width=2, color='darkred'))))
     
     fig = go.Figure(data=data)
     
     # Add dummy traces for legend
     fig.add_trace(go.Scatter3d(x=[None], y=[None], z=[None], mode='markers', 
-                               marker=dict(size=10, color='blue'), name='Base Form'))
+                               marker=dict(size=12, color='darkblue', symbol='square'), name='Reference Form'))
     
     if items2 is not None:
         fig.add_trace(go.Scatter3d(x=[None], y=[None], z=[None], mode='markers', 
-                                   marker=dict(size=10, color='red'), name=label2))
+                                   marker=dict(size=12, color='darkred', symbol='square'), name=label2))
 
     fig.update_layout(title=title, scene=dict(
         xaxis_title='Theta 1',
         yaxis_title='Theta 2',
         zaxis_title='Expected Score'
-    ), width=700, height=600, showlegend=True)
+    ), width=700, height=600, showlegend=True,
+    legend=dict(
+        x=0.7, y=0.95,
+        bgcolor='rgba(255, 255, 255, 0.8)',
+        bordercolor='black',
+        borderwidth=1
+    ))
     return fig
 
 def plot_contour_optimal_line(items, score_level, title="TCC Contour & Optimal Line"):
@@ -757,7 +846,24 @@ def plot_conditional_score_prob(items, title="2D MIRT Conditional Observed Score
     return fig
 
 # ==========================================
-# 4. STREAMLIT APP UI
+# 4. HELPER FUNCTIONS
+# ==========================================
+
+def calc_rmsd(y1, y2, x_scores, threshold):
+    """Calculate RMSD between two equating functions above a threshold."""
+    # Ensure same length
+    min_len = min(len(y1), len(y2))
+    y1 = y1[:min_len]
+    y2 = y2[:min_len]
+    x = x_scores[:min_len]
+    
+    mask = x >= threshold
+    if np.sum(mask) == 0:
+        return 0.0
+    return np.sqrt(np.mean((y1[mask] - y2[mask])**2))
+
+# ==========================================
+# 5. STREAMLIT APP UI
 # ==========================================
 
 st.set_page_config(layout="wide", page_title="MC-I Simulation Study")
@@ -780,36 +886,211 @@ use_target_group = st.sidebar.checkbox("Use Target Group Distribution", value=Fa
 # Show Generation Info
 with st.expander("📋 View Generation Parameters & Distributions", expanded=True):
     st.markdown("### Item Parameter Generation (MC-I)")
-    st.markdown("""
-    | Form | Items | $a_1$ | $a_2$ | $d$ | $g$ |
-    |---|---|---|---|---|---|
-    | **Base** | 1-50 | $U(0.57, 1.14)$ | $U(0.57, 1.14)$ | $U(-1.5, 1.5)$ | $Beta(5, 17)$ |
-    | **Same RC** | 1-25 | $U(0.57, 1.14)$ | $U(0.98, 1.95)$ | $U(-0.95, 1.5)$ | $Beta(5, 17)$ |
-    | | 26-50 | $U(0.98, 1.95)$ | $U(0.57, 1.14)$ | | |
-    | **Diff RC** | 1-25 | $U(0.26, 0.57)$ | $U(0.78, 1.57)$ | $U(-0.95, 1.5)$ | $Beta(5, 17)$ |
-    | | 26-50 | $U(0.78, 1.57)$ | $U(0.66, 1.31)$ | | |
-    """)
+    
+    # Initialize session state for editable tables if not exists
+    if "item_params" not in st.session_state:
+        st.session_state.item_params = pd.DataFrame({
+            "Form": ["Base", "Same RC - C1", "Same RC - C2", "Diff RC - C1", "Diff RC - C2"],
+            "a1_min": [0.57, 0.57, 0.98, 0.26, 0.78],
+            "a1_max": [1.14, 1.14, 1.95, 0.57, 1.57],
+            "a2_min": [0.57, 0.98, 0.57, 0.78, 0.66],
+            "a2_max": [1.14, 1.95, 1.14, 1.57, 1.31],
+            "d_min": [-1.5, -0.95, -0.95, -0.95, -0.95],
+            "d_max": [1.5, 1.5, 1.5, 1.5, 1.5],
+        })
+    
+    st.write("Edit the item parameter distributions below:")
+    edited_item_params = st.data_editor(st.session_state.item_params, key="item_params_editor", use_container_width=True)
+    st.session_state.item_params = edited_item_params
     
     st.markdown("### Latent Ability Distributions")
     
-    md_text = r"""
-    **Reference Group**: $\mu = (0,0)$, $\Sigma = \begin{pmatrix} 1 & 0.3 \\ 0.3 & 1 \end{pmatrix}$
+    # Initialize session state for latent distributions if not exists
+    if "latent_distributions" not in st.session_state:
+        st.session_state.latent_distributions = pd.DataFrame({
+            "Group": ["Reference", "Target"],
+            "mu_1": [0.0, 0.5],
+            "mu_2": [0.0, 0.5],
+            "sigma_11": [1.0, 1.0],
+            "sigma_12": [0.3, 0.5],
+            "sigma_22": [1.0, 1.2],
+        })
     
-    **Target Group**: $\mu = (0.5, 0.5)$, $\Sigma = \begin{pmatrix} 1 & 0.5 \\ 0.5 & 1.2 \end{pmatrix}$
-    """
+    st.write("Edit the latent ability distributions below:")
+    edited_latent = st.data_editor(st.session_state.latent_distributions, key="latent_editor", use_container_width=True)
+    st.session_state.latent_distributions = edited_latent
     
-    st.markdown(md_text, unsafe_allow_html=True)
+    # Display in readable format with matrix notation
+    ref_mu_1 = st.session_state.latent_distributions.loc[0, "mu_1"]
+    ref_mu_2 = st.session_state.latent_distributions.loc[0, "mu_2"]
+    ref_s11 = st.session_state.latent_distributions.loc[0, "sigma_11"]
+    ref_s12 = st.session_state.latent_distributions.loc[0, "sigma_12"]
+    ref_s22 = st.session_state.latent_distributions.loc[0, "sigma_22"]
+    
+    tar_mu_1 = st.session_state.latent_distributions.loc[1, "mu_1"]
+    tar_mu_2 = st.session_state.latent_distributions.loc[1, "mu_2"]
+    tar_s11 = st.session_state.latent_distributions.loc[1, "sigma_11"]
+    tar_s12 = st.session_state.latent_distributions.loc[1, "sigma_12"]
+    tar_s22 = st.session_state.latent_distributions.loc[1, "sigma_22"]
+    
+    st.markdown(f"""
+    **Reference Group:** μ = ({ref_mu_1:.1f}, {ref_mu_2:.1f}), Σ = $\\begin{{pmatrix}} {ref_s11:.2f} & {ref_s12:.2f} \\ {ref_s12:.2f} & {ref_s22:.2f} \\end{{pmatrix}}$
+    
+    **Target Group:** μ = ({tar_mu_1:.1f}, {tar_mu_2:.1f}), Σ = $\\begin{{pmatrix}} {tar_s11:.2f} & {tar_s12:.2f} \\ {tar_s12:.2f} & {tar_s22:.2f} \\end{{pmatrix}}$
+    """)
 
-if st.sidebar.button("Run Simulation", type="primary"):
+run_simulation = st.sidebar.button("Run Simulation", type="primary")
+
+with st.sidebar.expander("Parametric Generation (Lognormal/Normal/Beta)", expanded=False):
+    param_n_items = st.number_input("Number of Items", value=50, min_value=5, step=5, key="param_n_items")
+    st.markdown("**Reference Form**")
+    ref_col1, ref_col2, ref_col3, ref_col4 = st.columns(4)
+    with ref_col1:
+        ref_a1_mu = st.number_input("a1 log-mean", value=0.0, step=0.1, key="ref_a1_mu")
+        ref_a1_sigma = st.number_input("a1 log-sd", value=0.25, step=0.05, min_value=0.0, key="ref_a1_sigma")
+    with ref_col2:
+        ref_a2_mu = st.number_input("a2 log-mean", value=0.0, step=0.1, key="ref_a2_mu")
+        ref_a2_sigma = st.number_input("a2 log-sd", value=0.25, step=0.05, min_value=0.0, key="ref_a2_sigma")
+    with ref_col3:
+        ref_d_mu = st.number_input("d mean", value=0.0, step=0.1, key="ref_d_mu")
+        ref_d_sigma = st.number_input("d sd", value=1.0, step=0.1, min_value=0.0, key="ref_d_sigma")
+    with ref_col4:
+        ref_g_alpha = st.number_input("g alpha", value=5.0, step=0.5, min_value=0.01, key="ref_g_alpha")
+        ref_g_beta = st.number_input("g beta", value=17.0, step=0.5, min_value=0.01, key="ref_g_beta")
+
+    st.markdown("**New Form**")
+    new_col1, new_col2, new_col3, new_col4 = st.columns(4)
+    with new_col1:
+        new_a1_mu = st.number_input("a1 log-mean", value=0.0, step=0.1, key="new_a1_mu")
+        new_a1_sigma = st.number_input("a1 log-sd", value=0.25, step=0.05, min_value=0.0, key="new_a1_sigma")
+    with new_col2:
+        new_a2_mu = st.number_input("a2 log-mean", value=0.0, step=0.1, key="new_a2_mu")
+        new_a2_sigma = st.number_input("a2 log-sd", value=0.25, step=0.05, min_value=0.0, key="new_a2_sigma")
+    with new_col3:
+        new_d_mu = st.number_input("d mean", value=0.0, step=0.1, key="new_d_mu")
+        new_d_sigma = st.number_input("d sd", value=1.0, step=0.1, min_value=0.0, key="new_d_sigma")
+    with new_col4:
+        new_g_alpha = st.number_input("g alpha", value=5.0, step=0.5, min_value=0.01, key="new_g_alpha")
+        new_g_beta = st.number_input("g beta", value=17.0, step=0.5, min_value=0.01, key="new_g_beta")
+
+    st.markdown("**Group Distributions**")
+    dist_ref_col, dist_new_col = st.columns(2)
+    with dist_ref_col:
+        st.markdown("Reference")
+        ref_mu1_param = st.number_input("mu1", value=0.0, step=0.1, key="ref_mu1_param")
+        ref_mu2_param = st.number_input("mu2", value=0.0, step=0.1, key="ref_mu2_param")
+        ref_s11_param = st.number_input("sigma11", value=1.0, step=0.1, key="ref_s11_param")
+        ref_s12_param = st.number_input("sigma12", value=0.3, step=0.1, key="ref_s12_param")
+        ref_s22_param = st.number_input("sigma22", value=1.0, step=0.1, key="ref_s22_param")
+    with dist_new_col:
+        st.markdown("New")
+        new_mu1_param = st.number_input("mu1", value=0.5, step=0.1, key="new_mu1_param")
+        new_mu2_param = st.number_input("mu2", value=0.5, step=0.1, key="new_mu2_param")
+        new_s11_param = st.number_input("sigma11", value=1.0, step=0.1, key="new_s11_param")
+        new_s12_param = st.number_input("sigma12", value=0.5, step=0.1, key="new_s12_param")
+        new_s22_param = st.number_input("sigma22", value=1.2, step=0.1, key="new_s22_param")
+
+    use_new_group_param = st.checkbox(
+        "Use New Group Distribution",
+        value=False,
+        help="If checked, uses New Group distribution; otherwise uses Reference Group distribution.",
+        key="use_new_group_param"
+    )
+
+run_parametric = st.sidebar.button("Run Parametric Analysis", type="primary", key="run_parametric")
+
+# --- Real Data Analysis Controls (Sidebar) ---
+with st.sidebar.expander("📤 Upload Real Item Parameters", expanded=False):
+    st.markdown("**Upload CSV files with columns:** `a1`, `a2`, `d`, `g`")
+    
+    col_upload_ref, col_upload_new = st.columns(2)
+    with col_upload_ref:
+        uploaded_ref = st.file_uploader("Reference Form", type=['csv'], key="ref_upload")
+        if uploaded_ref:
+            df_uploaded_ref = pd.read_csv(uploaded_ref)
+            st.info(f"✓ {len(df_uploaded_ref)} items")
+    with col_upload_new:
+        uploaded_new = st.file_uploader("New Form", type=['csv'], key="new_upload")
+        if uploaded_new:
+            df_uploaded_new = pd.read_csv(uploaded_new)
+            st.info(f"✓ {len(df_uploaded_new)} items")
+    
+    st.markdown("---")
+    st.markdown("**Population Distributions**")
+    
+    dist_ref_real, dist_new_real = st.columns(2)
+    with dist_ref_real:
+        st.markdown("*Ref*")
+        ref_mu1_real = st.number_input("μ₁", value=0.0, step=0.1, key="ref_mu1_real")
+        ref_mu2_real = st.number_input("μ₂", value=0.0, step=0.1, key="ref_mu2_real")
+        ref_s11_real = st.number_input("σ₁₁", value=1.0, step=0.1, key="ref_s11_real")
+        ref_s12_real = st.number_input("σ₁₂", value=0.3, step=0.1, key="ref_s12_real")
+        ref_s22_real = st.number_input("σ₂₂", value=1.0, step=0.1, key="ref_s22_real")
+    with dist_new_real:
+        st.markdown("*New*")
+        new_mu1_real = st.number_input("μ₁", value=0.5, step=0.1, key="new_mu1_real")
+        new_mu2_real = st.number_input("μ₂", value=0.5, step=0.1, key="new_mu2_real")
+        new_s11_real = st.number_input("σ₁₁", value=1.0, step=0.1, key="new_s11_real")
+        new_s12_real = st.number_input("σ₁₂", value=0.5, step=0.1, key="new_s12_real")
+        new_s22_real = st.number_input("σ₂₂", value=1.2, step=0.1, key="new_s22_real")
+    
+    use_new_group_real = st.checkbox("Use New Group Distribution", value=False, 
+                                     help="If checked, uses New Group. If unchecked, uses Reference Group (equivalent groups).")
+
+run_real_analysis = st.sidebar.button("🚀 Run Real Data Analysis", type="primary", key="run_real_analysis")
+
+# --- Main Page Content ---
+st.markdown("---")
+st.markdown("## 🎲 Simulation with Generated Parameters")
+
+if run_simulation:
     with st.spinner("Generating data and performing equating..."):
         progress_bar = st.progress(0, text="Initializing...")
         
-        # Define Population Parameters
-        mu_ref = np.array([0, 0])
-        cov_ref = np.array([[1, 0.3], [0.3, 1]])
+        # Extract custom parameters from editable tables
+        item_param_df = st.session_state.item_params
+        latent_df = st.session_state.latent_distributions
         
-        mu_tar = np.array([0.5, 0.5])
-        cov_tar = np.array([[1, 0.5], [0.5, 1.2]])
+        # Build parameter config from item params table
+        params_config = {
+            "base_a1_min": item_param_df.loc[0, "a1_min"],
+            "base_a1_max": item_param_df.loc[0, "a1_max"],
+            "base_a2_min": item_param_df.loc[0, "a2_min"],
+            "base_a2_max": item_param_df.loc[0, "a2_max"],
+            "base_d_min": item_param_df.loc[0, "d_min"],
+            "base_d_max": item_param_df.loc[0, "d_max"],
+            
+            "same_rc_a1_c1_min": item_param_df.loc[1, "a1_min"],
+            "same_rc_a1_c1_max": item_param_df.loc[1, "a1_max"],
+            "same_rc_a2_c1_min": item_param_df.loc[1, "a2_min"],
+            "same_rc_a2_c1_max": item_param_df.loc[1, "a2_max"],
+            "same_rc_a1_c2_min": item_param_df.loc[2, "a1_min"],
+            "same_rc_a1_c2_max": item_param_df.loc[2, "a1_max"],
+            "same_rc_a2_c2_min": item_param_df.loc[2, "a2_min"],
+            "same_rc_a2_c2_max": item_param_df.loc[2, "a2_max"],
+            "same_rc_d_min": item_param_df.loc[1, "d_min"],
+            "same_rc_d_max": item_param_df.loc[1, "d_max"],
+            
+            "diff_rc_a1_c1_min": item_param_df.loc[3, "a1_min"],
+            "diff_rc_a1_c1_max": item_param_df.loc[3, "a1_max"],
+            "diff_rc_a2_c1_min": item_param_df.loc[3, "a2_min"],
+            "diff_rc_a2_c1_max": item_param_df.loc[3, "a2_max"],
+            "diff_rc_a1_c2_min": item_param_df.loc[4, "a1_min"],
+            "diff_rc_a1_c2_max": item_param_df.loc[4, "a1_max"],
+            "diff_rc_a2_c2_min": item_param_df.loc[4, "a2_min"],
+            "diff_rc_a2_c2_max": item_param_df.loc[4, "a2_max"],
+            "diff_rc_d_min": item_param_df.loc[3, "d_min"],
+            "diff_rc_d_max": item_param_df.loc[3, "d_max"],
+        }
+        
+        # Build latent distributions from editable table
+        mu_ref = np.array([latent_df.loc[0, "mu_1"], latent_df.loc[0, "mu_2"]])
+        cov_ref = np.array([[latent_df.loc[0, "sigma_11"], latent_df.loc[0, "sigma_12"]], 
+                            [latent_df.loc[0, "sigma_12"], latent_df.loc[0, "sigma_22"]]])
+        
+        mu_tar = np.array([latent_df.loc[1, "mu_1"], latent_df.loc[1, "mu_2"]])
+        cov_tar = np.array([[latent_df.loc[1, "sigma_11"], latent_df.loc[1, "sigma_12"]], 
+                            [latent_df.loc[1, "sigma_12"], latent_df.loc[1, "sigma_22"]]])
 
         # Determine Run Parameters based on Sidebar
         if use_target_group:
@@ -821,10 +1102,10 @@ if st.sidebar.button("Run Simulation", type="primary"):
             cov_run = cov_ref
             label_run = "Equivalent Group"
 
-        # 1. Generate Parameters
-        df_base = generate_form_parameters("base", n_items)
-        df_same_rc = generate_form_parameters("same_rc", n_items)
-        df_diff_rc = generate_form_parameters("diff_rc", n_items)
+        # 1. Generate Parameters with custom config
+        df_base = generate_form_parameters("base", n_items, params_config)
+        df_same_rc = generate_form_parameters("same_rc", n_items, params_config)
+        df_diff_rc = generate_form_parameters("diff_rc", n_items, params_config)
         
         progress_bar.progress(10, text="Projecting to UIRT...")
         # 2. Project to UIRT
@@ -841,7 +1122,9 @@ if st.sidebar.button("Run Simulation", type="primary"):
         # mu_tar, cov_tar = get_latent_params("target")
         
         fig_latent = plot_latent_distributions(mu_ref, cov_ref, mu_run, cov_run, label2=label_run)
-        st.pyplot(fig_latent)
+        _, col_latent, _ = st.columns([1, 2, 1])
+        with col_latent:
+            st.pyplot(fig_latent)
         
         # B. Vector Space
         st.subheader("B. Item Vector Space")
@@ -860,23 +1143,36 @@ if st.sidebar.button("Run Simulation", type="primary"):
         tab1, tab2, tab3 = st.tabs(["3D Surface", "Contour & Optimal Line", "Conditional Prob P(X=k)"])
         
         with tab1:
+            st.markdown("**Combined views: Blue = Base Form (Reference), Red = New Form**")
             col_surf1, col_surf2 = st.columns(2)
             with col_surf1:
                 fig_surf1 = plot_tcc_surface(df_base, "Base vs Same RC", items2=df_same_rc, label2="Same RC")
-                st.plotly_chart(fig_surf1)
+                st.plotly_chart(fig_surf1, use_container_width=True)
             with col_surf2:
                 fig_surf2 = plot_tcc_surface(df_base, "Base vs Diff RC", items2=df_diff_rc, label2="Diff RC")
-                st.plotly_chart(fig_surf2)
+                st.plotly_chart(fig_surf2, use_container_width=True)
             
         with tab2:
             target_score = n_items // 2
-            fig_cont = plot_contour_optimal_line(df_base, target_score, "Base Form Contour")
-            st.pyplot(fig_cont)
+            col_cont1, col_cont2, col_cont3 = st.columns([1, 2, 1])
+            with col_cont2:
+                st.markdown("#### Same RC Form")
+                fig_cont1 = plot_contour_optimal_line(df_same_rc, target_score, "Same RC Form Contour")
+                st.pyplot(fig_cont1)
+                st.markdown("#### Diff RC Form")
+                fig_cont2 = plot_contour_optimal_line(df_diff_rc, target_score, "Diff RC Form Contour")
+                st.pyplot(fig_cont2)
             
         with tab3:
-            st.markdown("Visualization of P(X=k | Theta) for all scores k.")
-            fig_cond = plot_conditional_score_prob(df_base, "Base Form")
-            st.plotly_chart(fig_cond)
+            st.markdown("Visualization of P(X=k | Theta) for all scores k on NEW forms.")
+            _, col_cond_center, _ = st.columns([1, 2, 1])
+            with col_cond_center:
+                st.markdown("#### Same RC Form")
+                fig_cond1 = plot_conditional_score_prob(df_same_rc, "Same RC Form")
+                st.plotly_chart(fig_cond1, use_container_width=True)
+                st.markdown("#### Diff RC Form")
+                fig_cond2 = plot_conditional_score_prob(df_diff_rc, "Diff RC Form")
+                st.plotly_chart(fig_cond2, use_container_width=True)
 
         # 4. Equating
         st.header("2. Equating Results")
@@ -1039,18 +1335,7 @@ if st.sidebar.button("Run Simulation", type="primary"):
         *   *Note: Scores below the sum of guessing parameters are excluded from RMSD calculation.*
         """)
         
-        def calc_rmsd(y1, y2, x_scores, threshold):
-            # Ensure same length
-            min_len = min(len(y1), len(y2))
-            y1 = y1[:min_len]
-            y2 = y2[:min_len]
-            x = x_scores[:min_len]
-            
-            mask = x >= threshold
-            if np.sum(mask) == 0:
-                return 0.0
-            return np.sqrt(np.mean((y1[mask] - y2[mask])**2))
-            
+        
         if use_target_group:
             # Reference: MIRT TSE
             data = {
@@ -1111,11 +1396,11 @@ if st.sidebar.button("Run Simulation", type="primary"):
             config_data = []
             for cond in conditions:
                 if cond['target']:
-                    mu_str = "[0.5, 0.5]"
-                    cov_str = "[[1, 0.5], [0.5, 1.2]]"
+                    mu_str = f"[{mu_tar[0]:.1f}, {mu_tar[1]:.1f}]"
+                    cov_str = f"[[{cov_tar[0,0]:.2f}, {cov_tar[0,1]:.2f}], [{cov_tar[1,0]:.2f}, {cov_tar[1,1]:.2f}]]"
                 else:
-                    mu_str = "[0, 0]"
-                    cov_str = "[[1, 0.3], [0.3, 1]]"
+                    mu_str = f"[{mu_ref[0]:.1f}, {mu_ref[1]:.1f}]"
+                    cov_str = f"[[{cov_ref[0,0]:.2f}, {cov_ref[0,1]:.2f}], [{cov_ref[1,0]:.2f}, {cov_ref[1,1]:.2f}]]"
                 
                 config_data.append({
                     "Condition": cond['name'],
@@ -1146,11 +1431,11 @@ if st.sidebar.button("Run Simulation", type="primary"):
             # Set params
             c_weights = cond['weights']
             if cond['target']:
-                c_mu = np.array([0.5, 0.5])
-                c_cov = np.array([[1, 0.5], [0.5, 1.2]])
+                c_mu = mu_tar
+                c_cov = cov_tar
             else:
-                c_mu = np.array([0, 0])
-                c_cov = np.array([[1, 0.3], [0.3, 1]])
+                c_mu = mu_ref
+                c_cov = cov_ref
                 
             # Run MIRT TSE & OSE for Same RC
             _, y_mirt_tse_1_c = run_mirt_tse_approx(df_base, df_same_rc, use_weights=c_weights, mu=c_mu, cov=c_cov)
@@ -1199,5 +1484,358 @@ if st.sidebar.button("Run Simulation", type="primary"):
         df_all_results = pd.DataFrame(results_all)
         st.dataframe(df_all_results.style.format("{:.4f}", subset=df_all_results.columns[1:]))
 
-else:
-    st.info("Click 'Run Simulation' to start.")
+if run_parametric:
+    with st.spinner("Generating parameters and performing equating..."):
+        progress_bar = st.progress(0, text="Initializing...")
+
+        df_base_param = generate_form_parameters_lognormal(
+            n_items=param_n_items,
+            a1_mu=ref_a1_mu,
+            a1_sigma=ref_a1_sigma,
+            a2_mu=ref_a2_mu,
+            a2_sigma=ref_a2_sigma,
+            d_mu=ref_d_mu,
+            d_sigma=ref_d_sigma,
+            g_alpha=ref_g_alpha,
+            g_beta=ref_g_beta,
+            seed=seed
+        )
+        df_new_param = generate_form_parameters_lognormal(
+            n_items=param_n_items,
+            a1_mu=new_a1_mu,
+            a1_sigma=new_a1_sigma,
+            a2_mu=new_a2_mu,
+            a2_sigma=new_a2_sigma,
+            d_mu=new_d_mu,
+            d_sigma=new_d_sigma,
+            g_alpha=new_g_alpha,
+            g_beta=new_g_beta,
+            seed=seed + 1
+        )
+
+        mu_ref_param = np.array([ref_mu1_param, ref_mu2_param])
+        cov_ref_param = np.array([[ref_s11_param, ref_s12_param], [ref_s12_param, ref_s22_param]])
+
+        mu_new_param = np.array([new_mu1_param, new_mu2_param])
+        cov_new_param = np.array([[new_s11_param, new_s12_param], [new_s12_param, new_s22_param]])
+
+        if use_new_group_param:
+            mu_run_param = mu_new_param
+            cov_run_param = cov_new_param
+            label_run_param = "New Group"
+        else:
+            mu_run_param = mu_ref_param
+            cov_run_param = cov_ref_param
+            label_run_param = "Equivalent Group"
+
+        progress_bar.progress(10, text="Projecting to UIRT...")
+        uirt_base_param = project_to_uirt(df_base_param)
+        uirt_new_param = project_to_uirt(df_new_param)
+
+        st.header("1. Visualizations (Parametric Generation)")
+
+        st.subheader("A. Latent Ability Distributions")
+        fig_latent_param = plot_latent_distributions(
+            mu_ref_param,
+            cov_ref_param,
+            mu_run_param,
+            cov_run_param,
+            label2=label_run_param
+        )
+        _, col_latent_param, _ = st.columns([1, 2, 1])
+        with col_latent_param:
+            st.pyplot(fig_latent_param)
+
+        st.subheader("B. Item Vector Space")
+        col_vec1, col_vec2 = st.columns(2)
+        with col_vec1:
+            st.pyplot(plot_vectors(df_base_param, "Reference Form"))
+        with col_vec2:
+            st.pyplot(plot_vectors(df_new_param, "New Form"))
+
+        st.subheader("C. Test Characteristic Surface & Contour")
+        tab1_p, tab2_p, tab3_p = st.tabs(["3D Surface", "Contour & Optimal Line", "Conditional Prob P(X=k)"])
+
+        with tab1_p:
+            st.markdown("**Combined view: Blue = Reference Form, Red = New Form**")
+            fig_surf_param = plot_tcc_surface(df_base_param, "Reference vs New", items2=df_new_param, label2="New Form")
+            st.plotly_chart(fig_surf_param, use_container_width=True)
+
+        with tab2_p:
+            target_score_param = param_n_items // 2
+            _, col_cont_param, _ = st.columns([1, 2, 1])
+            with col_cont_param:
+                fig_cont_param = plot_contour_optimal_line(df_new_param, target_score_param, "New Form Contour")
+                st.pyplot(fig_cont_param)
+
+        with tab3_p:
+            st.markdown("Visualization of P(X=k | Theta) for all scores k on New form.")
+            _, col_cond_param, _ = st.columns([1, 2, 1])
+            with col_cond_param:
+                fig_cond_param = plot_conditional_score_prob(df_new_param, "New Form")
+                st.plotly_chart(fig_cond_param, use_container_width=True)
+
+        st.subheader("D. Item Parameters & UIRT Converted Parameters")
+        tab_params1, tab_params2 = st.tabs(["Reference Form", "New Form"])
+        
+        with tab_params1:
+            st.markdown("**MIRT Parameters (Generated)**")
+            st.dataframe(df_base_param.style.format("{:.3f}"), use_container_width=True)
+            st.markdown("**UIRT Parameters (Converted)**")
+            st.dataframe(uirt_base_param.style.format("{:.3f}"), use_container_width=True)
+        
+        with tab_params2:
+            st.markdown("**MIRT Parameters (Generated)**")
+            st.dataframe(df_new_param.style.format("{:.3f}"), use_container_width=True)
+            st.markdown("**UIRT Parameters (Converted)**")
+            st.dataframe(uirt_new_param.style.format("{:.3f}"), use_container_width=True)
+
+        st.header("2. Equating Results (Parametric Generation)")
+
+        progress_bar.progress(30, text="Running Equating...")
+        x_mirt_tse_param, y_mirt_tse_param = run_mirt_tse_approx(
+            df_base_param,
+            df_new_param,
+            use_weights=use_weights_mirt,
+            mu=mu_run_param,
+            cov=cov_run_param
+        )
+        x_mirt_ose_param, y_mirt_ose_param = run_mirt_ose(
+            df_base_param,
+            df_new_param,
+            mu=mu_run_param,
+            cov=cov_run_param
+        )
+        x_uirt_tse_param, y_uirt_tse_param = run_uirt_tse(uirt_base_param, uirt_new_param)
+        x_uirt_ose_param, y_uirt_ose_param = run_uirt_ose(uirt_base_param, uirt_new_param)
+
+        progress_bar.progress(100, text="Done!")
+
+        st.subheader("Equating Functions")
+        fig_eq_param, ax_eq_param = plt.subplots(1, 1, figsize=(10, 7))
+
+        sum_g_param = df_new_param['g'].sum()
+        mask_param = (x_mirt_tse_param >= sum_g_param) & (x_mirt_tse_param <= len(df_new_param) - sum_g_param)
+
+        ax_eq_param.plot([0, len(df_new_param)], [0, len(df_new_param)], 'k--', alpha=0.3, label="Identity")
+        ax_eq_param.plot(x_mirt_tse_param[mask_param], y_mirt_tse_param[mask_param], label=f"MIRT TSE (w={use_weights_mirt})", lw=2, color='red')
+        ax_eq_param.plot(x_mirt_ose_param[mask_param], y_mirt_ose_param[mask_param], label="MIRT OSE", lw=2, color='blue')
+        ax_eq_param.plot(x_uirt_tse_param[mask_param], y_uirt_tse_param[mask_param], label="UIRT TSE", lw=2, color='green', linestyle='--')
+        ax_eq_param.plot(x_uirt_ose_param[mask_param], y_uirt_ose_param[mask_param], label="UIRT OSE", lw=2, color='orange', linestyle=':')
+
+        ax_eq_param.set_xlabel("New Form Score", fontsize=12)
+        ax_eq_param.set_ylabel("Reference Form Score", fontsize=12)
+        ax_eq_param.set_title("Equating Functions: New → Reference", fontsize=14, fontweight='bold')
+        ax_eq_param.legend(fontsize=10)
+        ax_eq_param.grid(True, alpha=0.3)
+
+        st.pyplot(fig_eq_param)
+
+        st.subheader("Equating Table")
+        threshold_table_param = st.slider("Minimum Score to Display", 0, len(df_new_param), int(sum_g_param), key="threshold_param")
+
+        df_eq_results_param = pd.DataFrame({
+            "Raw Score": x_mirt_tse_param,
+            f"MIRT TSE (w={use_weights_mirt})": y_mirt_tse_param,
+            "MIRT OSE": y_mirt_ose_param,
+            "UIRT TSE": y_uirt_tse_param,
+            "UIRT OSE": y_uirt_ose_param
+        })
+
+        df_eq_results_filt_param = df_eq_results_param[df_eq_results_param["Raw Score"] >= threshold_table_param]
+        st.dataframe(df_eq_results_filt_param.style.format("{:.4f}", subset=df_eq_results_param.columns[1:]))
+
+        st.subheader("Root Mean Squared Difference (RMSD)")
+
+        if use_new_group_param:
+            rmsd_mirt_tse_param = 0.0
+            rmsd_mirt_ose_param = calc_rmsd(y_mirt_tse_param, y_mirt_ose_param, x_mirt_tse_param, sum_g_param)
+            rmsd_uirt_tse_param = calc_rmsd(y_mirt_tse_param, y_uirt_tse_param, x_mirt_tse_param, sum_g_param)
+            rmsd_uirt_ose_param = calc_rmsd(y_mirt_tse_param, y_uirt_ose_param, x_mirt_tse_param, sum_g_param)
+            ref_label_param = "MIRT TSE"
+        else:
+            rmsd_mirt_tse_param = calc_rmsd(y_mirt_tse_param, x_mirt_tse_param, x_mirt_tse_param, sum_g_param)
+            rmsd_mirt_ose_param = calc_rmsd(y_mirt_ose_param, x_mirt_tse_param, x_mirt_tse_param, sum_g_param)
+            rmsd_uirt_tse_param = calc_rmsd(y_uirt_tse_param, x_mirt_tse_param, x_mirt_tse_param, sum_g_param)
+            rmsd_uirt_ose_param = calc_rmsd(y_uirt_ose_param, x_mirt_tse_param, x_mirt_tse_param, sum_g_param)
+            ref_label_param = "Identity"
+
+        df_rmsd_param = pd.DataFrame({
+            "Method": [f"MIRT TSE (w={use_weights_mirt})", "MIRT OSE", "UIRT TSE", "UIRT OSE"],
+            f"RMSD vs {ref_label_param}": [rmsd_mirt_tse_param, rmsd_mirt_ose_param, rmsd_uirt_tse_param, rmsd_uirt_ose_param]
+        })
+
+        st.dataframe(df_rmsd_param.style.format("{:.4f}", subset=df_rmsd_param.columns[1:]))
+
+if run_real_analysis:
+    if uploaded_ref is None or uploaded_new is None:
+        st.error("⚠️ Please upload both Reference and New form item parameters!")
+    else:
+        with st.spinner("Running analysis with real data..."):
+            progress_bar = st.progress(0, text="Initializing...")
+            
+            # Use uploaded data
+            df_base = df_uploaded_ref
+            df_new = df_uploaded_new
+            
+            # Validate uploaded data
+            required_cols = ['a1', 'a2', 'd', 'g']
+            if not all(col in df_base.columns for col in required_cols):
+                st.error(f"Reference form CSV must contain columns: {required_cols}")
+                st.stop()
+            if not all(col in df_new.columns for col in required_cols):
+                st.error(f"New form CSV must contain columns: {required_cols}")
+                st.stop()
+            
+            # Build population parameters
+            mu_ref_real = np.array([ref_mu1_real, ref_mu2_real])
+            cov_ref_real = np.array([[ref_s11_real, ref_s12_real], [ref_s12_real, ref_s22_real]])
+            
+            mu_new_real = np.array([new_mu1_real, new_mu2_real])
+            cov_new_real = np.array([[new_s11_real, new_s12_real], [new_s12_real, new_s22_real]])
+            
+            # Determine which population to use
+            if use_new_group_real:
+                mu_run_real = mu_new_real
+                cov_run_real = cov_new_real
+                label_run_real = "New Group"
+            else:
+                mu_run_real = mu_ref_real
+                cov_run_real = cov_ref_real
+                label_run_real = "Equivalent Group"
+            
+            progress_bar.progress(10, text="Projecting to UIRT...")
+            # Project to UIRT
+            uirt_base_real = project_to_uirt(df_base)
+            uirt_new_real = project_to_uirt(df_new)
+            
+            # Visualizations
+            st.header("1. Visualizations (Real Data Analysis)")
+            
+            # A. Latent Distributions
+            st.subheader("A. Latent Ability Distributions")
+            fig_latent_real = plot_latent_distributions(mu_ref_real, cov_ref_real, mu_run_real, cov_run_real, label2=label_run_real)
+            _, col_latent_real, _ = st.columns([1, 2, 1])
+            with col_latent_real:
+                st.pyplot(fig_latent_real)
+            
+            # B. Vector Space
+            st.subheader("B. Item Vector Space")
+            col_vec1, col_vec2 = st.columns(2)
+            with col_vec1:
+                st.pyplot(plot_vectors(df_base, "Reference Form"))
+            with col_vec2:
+                st.pyplot(plot_vectors(df_new, "New Form"))
+            
+            # C. TCC Surface & Contour
+            st.subheader("C. Test Characteristic Surface & Contour")
+            tab1_real, tab2_real, tab3_real = st.tabs(["3D Surface", "Contour & Optimal Line", "Conditional Prob P(X=k)"])
+            
+            with tab1_real:
+                st.markdown("**Combined view: Blue = Reference Form, Red = New Form**")
+                fig_tcc_combined = plot_tcc_surface(df_base, "Reference vs New", items2=df_new, label2="New Form")
+                st.plotly_chart(fig_tcc_combined, use_container_width=True)
+            
+            with tab2_real:
+                st.markdown("Iso-score contour line for New form.")
+                target_score_real = len(df_new) // 2
+                _, col_cont_real, _ = st.columns([1, 2, 1])
+                with col_cont_real:
+                    fig_cont_real = plot_contour_optimal_line(df_new, target_score_real, "New Form Contour")
+                    st.pyplot(fig_cont_real)
+            
+            with tab3_real:
+                st.markdown("Visualization of P(X=k | Theta) for all scores k on New form.")
+                _, col_cond_real, _ = st.columns([1, 2, 1])
+                with col_cond_real:
+                    fig_cond_real = plot_conditional_score_prob(df_new, "New Form")
+                    st.plotly_chart(fig_cond_real, use_container_width=True)
+            
+            # Equating Results
+            st.header("2. Equating Results (Real Data Analysis)")
+            
+            progress_bar.progress(30, text="Running Equating...")
+            x_mirt_tse_real, y_mirt_tse_real = run_mirt_tse_approx(
+                df_base,
+                df_new,
+                use_weights=use_weights_mirt,
+                mu=mu_run_real,
+                cov=cov_run_real
+            )
+            
+            progress_bar.progress(50, text="Running MIRT OSE...")
+            x_mirt_ose_real, y_mirt_ose_real = run_mirt_ose(df_base, df_new, mu=mu_run_real, cov=cov_run_real)
+            
+            progress_bar.progress(70, text="Running UIRT TSE...")
+            x_uirt_tse_real, y_uirt_tse_real = run_uirt_tse(uirt_base_real, uirt_new_real)
+            
+            progress_bar.progress(85, text="Running UIRT OSE...")
+            x_uirt_ose_real, y_uirt_ose_real = run_uirt_ose(uirt_base_real, uirt_new_real)
+            
+            progress_bar.progress(95, text="Plotting Equating Functions...")
+            
+            st.subheader("Equating Functions")
+            fig_eq_real, ax_eq_real = plt.subplots(1, 1, figsize=(10, 7))
+            
+            sum_g_real = df_new['g'].sum()
+            mask_real = (x_mirt_tse_real >= sum_g_real) & (x_mirt_tse_real <= len(df_new) - sum_g_real)
+            
+            ax_eq_real.plot([0, len(df_new)], [0, len(df_new)], 'k--', alpha=0.3, label="Identity")
+            ax_eq_real.plot(x_mirt_tse_real[mask_real], y_mirt_tse_real[mask_real], label=f"MIRT TSE (w={use_weights_mirt})", lw=2, color='red')
+            ax_eq_real.plot(x_mirt_ose_real[mask_real], y_mirt_ose_real[mask_real], label="MIRT OSE", lw=2, color='blue')
+            ax_eq_real.plot(x_uirt_tse_real[mask_real], y_uirt_tse_real[mask_real], label="UIRT TSE", lw=2, color='green', linestyle='--')
+            ax_eq_real.plot(x_uirt_ose_real[mask_real], y_uirt_ose_real[mask_real], label="UIRT OSE", lw=2, color='orange', linestyle=':')
+            
+            ax_eq_real.set_xlabel("New Form Score", fontsize=12)
+            ax_eq_real.set_ylabel("Reference Form Score", fontsize=12)
+            ax_eq_real.set_title("Equating Functions: New → Reference", fontsize=14, fontweight='bold')
+            ax_eq_real.legend(fontsize=10)
+            ax_eq_real.grid(True, alpha=0.3)
+            
+            _, col_eq_real, _ = st.columns([1, 3, 1])
+            with col_eq_real:
+                st.pyplot(fig_eq_real)
+            
+            progress_bar.progress(100, text="Done!")
+            
+            st.subheader("Equating Table")
+            threshold_table_real = st.slider("Minimum Score to Display", 0, len(df_new), int(sum_g_real), key="threshold_real")
+            
+            df_eq_results_real = pd.DataFrame({
+                "Raw Score": x_mirt_tse_real,
+                f"MIRT TSE (w={use_weights_mirt})": y_mirt_tse_real,
+                "MIRT OSE": y_mirt_ose_real,
+                "UIRT TSE": y_uirt_tse_real,
+                "UIRT OSE": y_uirt_ose_real
+            })
+            
+            df_eq_results_filt_real = df_eq_results_real[df_eq_results_real["Raw Score"] >= threshold_table_real]
+            st.dataframe(df_eq_results_filt_real.style.format("{:.4f}", subset=df_eq_results_real.columns[1:]))
+            
+            # RMSD
+            st.subheader("RMSD Comparison")
+            
+            sum_g_real = df_base['g'].sum()
+            
+            if use_new_group_real:
+                rmsd_mirt_tse_real = calc_rmsd(y_mirt_tse_real, x_mirt_tse_real, x_mirt_ose_real, sum_g_real)
+                rmsd_mirt_ose_real = calc_rmsd(y_mirt_ose_real, x_mirt_tse_real, x_mirt_ose_real, sum_g_real)
+                rmsd_uirt_tse_real = calc_rmsd(y_uirt_tse_real, x_mirt_tse_real, x_mirt_ose_real, sum_g_real)
+                rmsd_uirt_ose_real = calc_rmsd(y_uirt_ose_real, x_mirt_tse_real, x_mirt_ose_real, sum_g_real)
+                ref_label_real = "MIRT OSE"
+            else:
+                rmsd_mirt_tse_real = calc_rmsd(y_mirt_tse_real, x_mirt_tse_real, x_mirt_tse_real, sum_g_real)
+                rmsd_mirt_ose_real = calc_rmsd(y_mirt_ose_real, x_mirt_tse_real, x_mirt_tse_real, sum_g_real)
+                rmsd_uirt_tse_real = calc_rmsd(y_uirt_tse_real, x_mirt_tse_real, x_mirt_tse_real, sum_g_real)
+                rmsd_uirt_ose_real = calc_rmsd(y_uirt_ose_real, x_mirt_tse_real, x_mirt_tse_real, sum_g_real)
+                ref_label_real = "Identity"
+            
+            df_rmsd_real = pd.DataFrame({
+                "Method": [f"MIRT TSE (w={use_weights_mirt})", "MIRT OSE", "UIRT TSE", "UIRT OSE"],
+                f"RMSD vs {ref_label_real}": [rmsd_mirt_tse_real, rmsd_mirt_ose_real, rmsd_uirt_tse_real, rmsd_uirt_ose_real]
+            })
+            
+            st.dataframe(df_rmsd_real.style.format("{:.4f}", subset=df_rmsd_real.columns[1:]))
+
+if not run_simulation and not run_parametric and not run_real_analysis:
+    st.info("Click one of the 'Run' buttons in the sidebar to start an analysis.")

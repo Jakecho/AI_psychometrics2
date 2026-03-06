@@ -24,7 +24,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pulp import *
-from ai_ata_engine import sequential_loft_assembly
 import plotly.graph_objects as go
 from io import BytesIO
 from datetime import datetime
@@ -1126,44 +1125,12 @@ def main():
     
     approach = st.sidebar.radio(
         "Approach", 
-        options=['IRT (Rasch)', 'AI Engine (Sequential LOFT)'],
-        index=1,
-        help="IRT (Rasch): Rasch with targets | AI Engine: NLP constraints + Sequential Generation"
+        options=['Base Form Optimal Under CTT / Rasch', 'IRT (Rasch)', 'CTT'],
+        index=0,
+        help="Base Form: Max info at logit cut | IRT (Rasch): Rasch with TIF/TCC targets | CTT: Classical statistics"
     )
     
     st.sidebar.divider()
-    
-    # AI Engine Configuration
-    llm_provider = 'gemini'
-    api_key = ''
-    user_prompt = ''
-    
-    if approach == 'AI Engine (Sequential LOFT)':
-        st.sidebar.subheader("🤖 AI Engine Configuration")
-        st.sidebar.caption("Translate English to Psychometric Constraints")
-        
-        llm_provider = st.sidebar.selectbox(
-            "Select AI Provider",
-            options=['gemini', 'openai'],
-            help="Choose the LLM backend to parse your constraints."
-        )
-        
-        api_key = st.sidebar.text_input(
-            "API Key",
-            type="password",
-            help="Enter your Gemini or OpenAI API key. Keys are not saved."
-        )
-        
-        if not api_key:
-            st.sidebar.warning("⚠️ API key required for AI Assembly.")
-            
-        user_prompt = st.sidebar.text_area(
-            "Natural Language Request",
-            placeholder="e.g. Build me 3 forms of 10 items. Keep Health Promotion between 2 and 4. Maximize around theta 0.5.",
-            height=100
-        )
-        
-        st.sidebar.divider()
     
     # Domain distribution - tidy layout
     st.sidebar.subheader("📚 Domain Distribution")
@@ -1653,115 +1620,74 @@ def main():
             st.session_state['enemy_check'] = enemy_check
             st.session_state['use_ctt_mode'] = use_ctt_mode
             
-            # Assemble forms
-            with st.spinner(f"🔧 Running engine for {n_forms} form(s)..."):
+            # Assemble multiple forms simultaneously
+            with st.spinner(f"🔧 Running simultaneous CBC solver for {n_forms} form(s)..."):
                 try:
-                    if approach == 'AI Engine (Sequential LOFT)':
-                        # Trigger the newly built AI Agent
-                        result = sequential_loft_assembly(
-                            item_bank=items_df,
-                            user_prompt=user_prompt,
-                            llm_provider=llm_provider,
-                            api_key=api_key
-                        )
-                        
+                    result = assemble_forms_with_cbc(items_df, config, n_forms)
+                    
+                    # Check for validation errors first
+                    if 'validation_errors' in result and result['validation_errors']:
+                        st.error(result.get('error_message', 'Validation failed'))
+                        for error in result['validation_errors']:
+                            st.warning(f"• {error}")
+                    elif result['status'] != 'Optimal':
+                        st.error(f"❌ Solver status: {result['status']}")
+                        st.info("Try relaxing constraints or reducing number of forms")
+                    else:
                         all_forms = []
-                        if 'forms' in result and result['forms']:
-                            for form_num, f_data in enumerate(result['forms'], start=1):
-                                selected_ids = f_data.get('selected_items', [])
-                                selected_df = items_df[items_df['item_id'].isin(selected_ids)].copy()
-                                
-                                # Evaluate using standard functions to power the UI charts
-                                stats = evaluate_form(selected_df, config)
-                                alpha = estimate_cronbachs_alpha(selected_df)
-                                
-                                all_forms.append({
-                                    'form_num': form_num,
-                                    'selected_df': selected_df,
-                                    'stats': stats,
-                                    'alpha': alpha,
-                                    'tif_at_cut': stats.get('tif_at_mid'),
-                                    'tcc_at_cut': stats.get('tcc_at_mid'),
-                                    'tif_at_low': stats.get('tif_at_low'),
-                                    'tcc_at_low': stats.get('tcc_at_low'),
-                                    'tif_at_high': stats.get('tif_at_high'),
-                                    'tcc_at_high': stats.get('tcc_at_high'),
-                                    'theta_cut': 0.0 # Default for plots, can be updated later
-                                })
-                                st.success(f"✅ Form {form_num} Assembled successfully using AI constraints! Generated {len(selected_ids)} items.")
+                        selected_forms = result['selected_forms']
+                        
+                        for form_num, selected_ids in enumerate(selected_forms, start=1):
+                            if not selected_ids:
+                                st.warning(f"⚠️ Form {form_num}: No items selected")
+                                continue
                             
+                            # Get selected items
+                            selected_df = items_df[items_df['item_id'].isin(selected_ids)].copy()
+                            
+                            # Evaluate form (now computes exact TIF/TCC at eval points)
+                            stats = evaluate_form(selected_df, config)
+                            alpha = estimate_cronbachs_alpha(selected_df)
+                            
+                            # Extract exact TIF/TCC values computed by evaluate_form
+                            if eval_points:
+                                theta_cut = eval_points['theta_mid']
+                                # Use exact values computed at precise theta points (not approximated)
+                                tif_at_cut = stats.get('tif_at_mid')
+                                tcc_at_cut = stats.get('tcc_at_mid')
+                                tif_at_low = stats.get('tif_at_low')
+                                tcc_at_low = stats.get('tcc_at_low')
+                                tif_at_high = stats.get('tif_at_high')
+                                tcc_at_high = stats.get('tcc_at_high')
+                            else:
+                                tif_at_cut = None
+                                tcc_at_cut = None
+                                tif_at_low = None
+                                tcc_at_low = None
+                                tif_at_high = None
+                                tcc_at_high = None
+                            
+                            # Store form data
+                            all_forms.append({
+                                'form_num': form_num,
+                                'selected_df': selected_df,
+                                'stats': stats,
+                                'alpha': alpha,
+                                'tif_at_cut': tif_at_cut,
+                                'tcc_at_cut': tcc_at_cut,
+                                'tif_at_low': tif_at_low,
+                                'tcc_at_low': tcc_at_low,
+                                'tif_at_high': tif_at_high,
+                                'tcc_at_high': tcc_at_high,
+                                'theta_cut': theta_cut if eval_points else None
+                            })
+                            
+                            st.success(f"✅ Form {form_num}: Optimal solution found! Selected {len(selected_ids)} items")
+                        
+                        if all_forms:
                             st.session_state['all_forms'] = all_forms
                             st.session_state['assembly_complete'] = True
-                            st.session_state['ai_usage_stats'] = result.get('usage_stats', {})
-                        else:
-                            st.error("❌ AI Engine failed to assemble forms based on the constraints extracted.")
-                    else:
-                        # Standard Simultaneous Deterministic solver
-                        result = assemble_forms_with_cbc(items_df, config, n_forms)
-                        
-                        # Check for validation errors first
-                        if 'validation_errors' in result and result['validation_errors']:
-                            st.error(result.get('error_message', 'Validation failed'))
-                            for error in result['validation_errors']:
-                                st.warning(f"• {error}")
-                        elif result['status'] != 'Optimal':
-                            st.error(f"❌ Solver status: {result['status']}")
-                            st.info("Try relaxing constraints or reducing number of forms")
-                        else:
-                            all_forms = []
-                            selected_forms = result['selected_forms']
-                            
-                            for form_num, selected_ids in enumerate(selected_forms, start=1):
-                                if not selected_ids:
-                                    st.warning(f"⚠️ Form {form_num}: No items selected")
-                                    continue
-                                
-                                # Get selected items
-                                selected_df = items_df[items_df['item_id'].isin(selected_ids)].copy()
-                                
-                                # Evaluate form (now computes exact TIF/TCC at eval points)
-                                stats = evaluate_form(selected_df, config)
-                                alpha = estimate_cronbachs_alpha(selected_df)
-                                
-                                # Extract exact TIF/TCC values computed by evaluate_form
-                                if eval_points:
-                                    theta_cut = eval_points['theta_mid']
-                                    # Use exact values computed at precise theta points (not approximated)
-                                    tif_at_cut = stats.get('tif_at_mid')
-                                    tcc_at_cut = stats.get('tcc_at_mid')
-                                    tif_at_low = stats.get('tif_at_low')
-                                    tcc_at_low = stats.get('tcc_at_low')
-                                    tif_at_high = stats.get('tif_at_high')
-                                    tcc_at_high = stats.get('tcc_at_high')
-                                else:
-                                    tif_at_cut = None
-                                    tcc_at_cut = None
-                                    tif_at_low = None
-                                    tcc_at_low = None
-                                    tif_at_high = None
-                                    tcc_at_high = None
-                                
-                                # Store form data
-                                all_forms.append({
-                                    'form_num': form_num,
-                                    'selected_df': selected_df,
-                                    'stats': stats,
-                                    'alpha': alpha,
-                                    'tif_at_cut': tif_at_cut,
-                                    'tcc_at_cut': tcc_at_cut,
-                                    'tif_at_low': tif_at_low,
-                                    'tcc_at_low': tcc_at_low,
-                                    'tif_at_high': tif_at_high,
-                                    'tcc_at_high': tcc_at_high,
-                                    'theta_cut': theta_cut if eval_points else None
-                                })
-                                
-                                st.success(f"✅ Form {form_num}: Optimal solution found! Selected {len(selected_ids)} items")
-                            
-                            if all_forms:
-                                st.session_state['all_forms'] = all_forms
-                                st.session_state['assembly_complete'] = True
-                    
+                
                 except Exception as e:
                     st.error(f"❌ Assembly failed: {e}")
                     import traceback
