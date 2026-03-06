@@ -149,6 +149,26 @@ except ImportError:
 # LLM Functions with Reasoning Transparency
 # ============================================================
 
+def _build_api_kwargs(model: str, messages: list, temperature: float, response_format: dict = None) -> dict:
+    """Build API call kwargs. All current models (GPT-5, o-series) only support temperature=1."""
+    kwargs = {"model": model, "messages": messages}
+    # GPT-5 and o-series models don't support custom temperature
+    # Only pass temperature for legacy models that support it
+    if not model.startswith("o") and not model.startswith("gpt-5"):
+        kwargs["temperature"] = temperature
+    if response_format:
+        kwargs["response_format"] = response_format
+    # GPT-5 models support reasoning_effort parameter (read from session state)
+    try:
+        import streamlit as _st
+        re = _st.session_state.get("_reasoning_effort")
+        if re and model.startswith("gpt-5"):
+            kwargs["reasoning_effort"] = re
+    except Exception:
+        pass
+    return kwargs
+
+
 def generate_stem_with_reasoning(
     client: OpenAI,
     domain: str,
@@ -204,10 +224,7 @@ Output as JSON:
     
     try:
         response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            response_format={"type": "json_object"}
+            **_build_api_kwargs(model, [{"role": "user", "content": prompt}], temperature, {"type": "json_object"})
         )
         return json.loads(response.choices[0].message.content)
     except Exception as e:
@@ -259,10 +276,7 @@ Output as JSON:
     
     try:
         response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            response_format={"type": "json_object"}
+            **_build_api_kwargs(model, [{"role": "user", "content": prompt}], temperature, {"type": "json_object"})
         )
         return json.loads(response.choices[0].message.content)
     except Exception as e:
@@ -330,10 +344,7 @@ Output as JSON:
     
     try:
         response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            response_format={"type": "json_object"}
+            **_build_api_kwargs(model, [{"role": "user", "content": prompt}], temperature, {"type": "json_object"})
         )
         return json.loads(response.choices[0].message.content)
     except Exception as e:
@@ -381,10 +392,7 @@ Output as JSON:
     
     try:
         response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            response_format={"type": "json_object"}
+            **_build_api_kwargs(model, [{"role": "user", "content": prompt}], temperature, {"type": "json_object"})
         )
         return json.loads(response.choices[0].message.content)
     except Exception as e:
@@ -451,10 +459,7 @@ Output as JSON:
     
     try:
         response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            response_format={"type": "json_object"}
+            **_build_api_kwargs(model, [{"role": "user", "content": prompt}], temperature, {"type": "json_object"})
         )
         return json.loads(response.choices[0].message.content)
     except Exception as e:
@@ -542,8 +547,27 @@ def main():
         st.divider()
         
         st.subheader("Model Settings")
-        model = st.selectbox("Model", ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"], index=0)
-        temperature = st.slider("Temperature", 0.0, 1.0, 0.4, 0.1)
+        model = st.selectbox("Model", [
+            "gpt-5", "gpt-5-mini", "gpt-5.2", "gpt-5.3-chat-latest",
+            "o3", "o3-mini", "o4-mini"
+        ], index=0)
+        
+        # GPT-5 and o-series models don't support custom temperature (fixed at 1.0)
+        # GPT-5 uses reasoning.effort instead; o-series uses internal reasoning
+        temperature = 1.0
+        st.caption("🔒 Temperature fixed at 1.0 (all current models)")
+        
+        if model.startswith("gpt-5"):
+            reasoning_effort = st.select_slider(
+                "Reasoning Effort",
+                options=["low", "medium", "high"],
+                value="medium",
+                help="Controls how much internal reasoning the model uses"
+            )
+            st.session_state["_reasoning_effort"] = reasoning_effort
+        else:
+            st.session_state["_reasoning_effort"] = None
+            st.info("ℹ️ o-series models manage reasoning internally")
     
     # Initialize session state
     if 'source_materials' not in st.session_state:
@@ -736,7 +760,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
                     with st.spinner("Regenerating stem..."):
                         stem_result = generate_stem_with_reasoning(
                             client, item['domain'], item['subtopic'], 
-                            item['cognitive_level'], combined_sources, model, temperature
+                            item['cognitive_level'], combined_sources, model=model, temperature=temperature
                         )
                         if stem_result:
                             st.session_state.item_data['stem'] = stem_result['stem']
@@ -747,7 +771,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
                     with st.spinner("Validating..."):
                         val_result = validate_component(
                             client, "Clinical Scenario", edited_stem, 
-                            combined_sources, item['domain'], model, temperature
+                            combined_sources, item['domain'], model=model, temperature=temperature
                         )
                         if val_result:
                             st.session_state.validations['stem'] = val_result
@@ -797,7 +821,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
                     with st.spinner("Regenerating question..."):
                         question_result = generate_question_with_reasoning(
                             client, item['stem'], item['cognitive_level'], 
-                            combined_sources, model, temperature
+                            combined_sources, model=model, temperature=temperature
                         )
                         if question_result:
                             st.session_state.item_data['question'] = question_result['question']
@@ -808,7 +832,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
                     with st.spinner("Validating..."):
                         val_result = validate_component(
                             client, "Question", edited_question, 
-                            combined_sources, item['domain'], model, temperature
+                            combined_sources, item['domain'], model=model, temperature=temperature
                         )
                         if val_result:
                             st.session_state.validations['question'] = val_result
@@ -914,7 +938,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
                                 new_opt = regenerate_single_option(
                                     client, item['stem'], item['question'], 
                                     existing, item['key_features'], 
-                                    combined_sources, model, temperature
+                                    combined_sources, model=model, temperature=temperature
                                 )
                                 if new_opt:
                                     st.session_state.item_data['options'][i] = new_opt
@@ -927,7 +951,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
                             with st.spinner("Validating..."):
                                 val_result = validate_component(
                                     client, f"Option {option_label}", opt['text'], 
-                                    combined_sources, item['domain'], model, temperature
+                                    combined_sources, item['domain'], model=model, temperature=temperature
                                 )
                                 if val_result:
                                     st.session_state.validations[f'opt_{i}'] = val_result
@@ -1542,7 +1566,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
     # Footer
     st.divider()
     st.markdown("""
-    **AIG SME Toolkit - Enhanced** | Powered by OpenAI GPT-4o  
+    **AIG SME Toolkit - Enhanced** | Powered by OpenAI LLMs  
     *Transparent reasoning with Deconstruct & Reconstruct + Key Feature Venn Diagram*
     """)
 
