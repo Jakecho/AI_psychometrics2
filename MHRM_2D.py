@@ -37,10 +37,28 @@ def prob_m2pl(theta, a, d):
 
 def log_likelihood(y, theta, a, d):
     """Compute complete data log-likelihood."""
-    P = prob_m2pl(theta, a, d)
-    epsilon = 1e-9
-    P = np.clip(P, epsilon, 1 - epsilon)
-    return np.sum(y * np.log(P) + (1 - y) * np.log(1 - P))
+    logits = np.dot(theta, a.T) + d
+    return np.sum(y * logits - np.logaddexp(0.0, logits))
+
+def summarize_recovery(true_values, est_values):
+    """Return recovery diagnostics for two aligned parameter vectors."""
+    true_values = np.asarray(true_values, dtype=float)
+    est_values = np.asarray(est_values, dtype=float)
+    bias = est_values - true_values
+
+    if true_values.size < 2 or np.allclose(true_values.std(), 0) or np.allclose(est_values.std(), 0):
+        corr = np.nan
+    else:
+        corr = np.corrcoef(true_values, est_values)[0, 1]
+
+    return {
+        'Mean True': np.mean(true_values),
+        'Mean Est': np.mean(est_values),
+        'Mean Bias': np.mean(bias),
+        'MAE': np.mean(np.abs(bias)),
+        'RMSE': np.sqrt(np.mean(bias ** 2)),
+        'Corr': corr
+    }
 
 def simulate_data(N, J, D, q_matrix, true_a=None, true_d=None):
     """
@@ -82,7 +100,7 @@ def plot_path_diagram(q_matrix, structure_type):
     """
     J, D = q_matrix.shape
     # Adjust height based on J
-    fig, ax = plt.subplots(figsize=(8, max(6, J * 0.3)))
+    fig, ax = plt.subplots(figsize=(6, max(4, J * 0.2)))
     
     if structure_type == "Bifactor":
         # G on Left, S on Right, Items in Middle
@@ -118,24 +136,24 @@ def plot_path_diagram(q_matrix, structure_type):
                 
     # Draw Nodes
     # Factors
-    ax.scatter(factor_x, factor_y, s=600, c='skyblue', edgecolors='black', zorder=10)
+    ax.scatter(factor_x, factor_y, s=380, c='skyblue', edgecolors='black', zorder=10)
     for d in range(D):
         if structure_type == "Bifactor":
             label = "G" if d == 0 else f"S_{d}"
         else:
             label = f"F{d+1}"
-        ax.text(factor_x[d], factor_y[d], label, ha='center', va='center', fontweight='bold')
+        ax.text(factor_x[d], factor_y[d], label, ha='center', va='center', fontweight='bold', fontsize=9)
         
     # Items
-    ax.scatter(item_x, item_y, s=100, c='white', edgecolors='black', zorder=10)
+    ax.scatter(item_x, item_y, s=65, c='white', edgecolors='black', zorder=10)
     # Label all items
     for j in range(J):
-        ax.text(item_x[j], item_y[j], str(j+1), ha='center', va='center', fontsize=7)
+        ax.text(item_x[j], item_y[j], str(j+1), ha='center', va='center', fontsize=6)
             
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis('off')
-    ax.set_title(f"Path Diagram: {structure_type}")
+    ax.set_title(f"Path Diagram: {structure_type}", fontsize=11)
     return fig
 
 # ==========================================
@@ -159,6 +177,14 @@ class MHRM_MIRT:
 
         # History for plotting
         self.loss_history = []
+        self.iteration_history = []
+
+    def _row_log_posterior(self, theta):
+        """Compute the row-wise log posterior up to an additive constant."""
+        logits = np.dot(theta, self.est_a.T) + self.est_d
+        ll = np.sum(self.Y * logits - np.logaddexp(0.0, logits), axis=1)
+        lprior = -0.5 * np.sum(theta ** 2, axis=1)
+        return ll + lprior
 
     def mh_step(self, n_steps=5, candidate_sd=0.5):
         """
@@ -169,6 +195,7 @@ class MHRM_MIRT:
         """
         accepted_count = 0
         total_count = 0
+        current_log_post = self._row_log_posterior(self.current_theta)
 
         for _ in range(n_steps):
             # 1. Propose new theta: theta_new ~ N(theta_curr, sd)
@@ -176,29 +203,15 @@ class MHRM_MIRT:
 
             # 2. Calculate Acceptance Ratio
             # Log Posterior ~ Log Likelihood + Log Prior
-
-            # Current LogL
-            P_curr = prob_m2pl(self.current_theta, self.est_a, self.est_d)
-            epsilon = 1e-9
-            P_curr = np.clip(P_curr, epsilon, 1-epsilon)
-            ll_curr = np.sum(self.Y * np.log(P_curr) + (1-self.Y) * np.log(1-P_curr), axis=1)
-            # Log Prior (Normal) - dropping constants
-            lprior_curr = -0.5 * np.sum(self.current_theta**2, axis=1)
-            log_post_curr = ll_curr + lprior_curr
-
-            # Proposed LogL
-            P_prop = prob_m2pl(proposal, self.est_a, self.est_d)
-            P_prop = np.clip(P_prop, epsilon, 1-epsilon)
-            ll_prop = np.sum(self.Y * np.log(P_prop) + (1-self.Y) * np.log(1-P_prop), axis=1)
-            lprior_prop = -0.5 * np.sum(proposal**2, axis=1)
-            log_post_prop = ll_prop + lprior_prop
+            proposal_log_post = self._row_log_posterior(proposal)
 
             # 3. Accept/Reject (Vectorized for all N)
-            log_ratio = log_post_prop - log_post_curr
+            log_ratio = proposal_log_post - current_log_post
             u = np.log(np.random.random(self.N))
 
             accept_mask = u < log_ratio
             self.current_theta[accept_mask] = proposal[accept_mask]
+            current_log_post[accept_mask] = proposal_log_post[accept_mask]
 
             accepted_count += np.sum(accept_mask)
             total_count += self.N
@@ -275,6 +288,7 @@ class MHRM_MIRT:
             if iteration % 5 == 0:
                 current_ll = log_likelihood(self.Y, self.current_theta, self.est_a, self.est_d)
                 self.loss_history.append(current_ll)
+                self.iteration_history.append(iteration + 1)
                 if progress_bar:
                     progress_bar.progress((iteration + 1) / max_iter,
                                         text=f"Iter {iteration}: LL={current_ll:.0f}, MH Accept={acc_rate:.2f}, Gamma={gamma:.4f}")
@@ -474,19 +488,19 @@ if st.button("🚀 Run Simulation & Calibration", type="primary"):
 
     # Bias and RMSE
     # Overall discrimination metrics (all non-zero loadings)
-    bias_a = np.mean(est_a[q_matrix==1] - true_a[q_matrix==1])
-    rmse_a = np.sqrt(np.mean((est_a[q_matrix==1] - true_a[q_matrix==1])**2))
+    overall_a_metrics = summarize_recovery(true_a[q_matrix == 1], est_a[q_matrix == 1])
 
     # Per-dimension discrimination metrics
     dim_rows = []
+    dim_metrics = {}
     for dim in range(mhrm.D):
         mask_dim = q_matrix[:, dim] == 1
         if np.sum(mask_dim) == 0:
             continue
         true_dim = true_a[mask_dim, dim]
         est_dim = est_a[mask_dim, dim]
-        bias_dim = np.mean(est_dim - true_dim)
-        rmse_dim = np.sqrt(np.mean((est_dim - true_dim)**2))
+        metrics_dim = summarize_recovery(true_dim, est_dim)
+        dim_metrics[dim] = metrics_dim
         
         if structure == "Bifactor":
             d_name = "General (G)" if dim == 0 else f"Specific (S_{dim})"
@@ -496,23 +510,16 @@ if st.button("🚀 Run Simulation & Calibration", type="primary"):
         dim_rows.append({
             'Parameter': 'Discrimination (a)',
             'Dimension': d_name,
-            'Mean True': np.mean(true_dim),
-            'Mean Est': np.mean(est_dim),
-            'Mean Bias': bias_dim,
-            'RMSE': rmse_dim,
+            **metrics_dim,
             'N Items': np.sum(mask_dim)
         })
 
-    bias_d = np.mean(est_d - true_d)
-    rmse_d = np.sqrt(np.mean((est_d - true_d)**2))
+    d_metrics = summarize_recovery(true_d, est_d)
 
     dim_rows.append({
         'Parameter': 'Intercept (d)',
         'Dimension': '-',
-        'Mean True': np.mean(true_d),
-        'Mean Est': np.mean(est_d),
-        'Mean Bias': bias_d,
-        'RMSE': rmse_d,
+        **d_metrics,
         'N Items': len(true_d)
     })
 
@@ -544,14 +551,21 @@ if st.button("🚀 Run Simulation & Calibration", type="primary"):
             min_val = min(np.min(true_a[mask_dim, dim]), np.min(est_a[mask_dim, dim]))
             max_val = max(np.max(true_a[mask_dim, dim]), np.max(est_a[mask_dim, dim]))
             ax_dim.plot([min_val, max_val], [min_val, max_val], 'r--', lw=1.5)
-            bias_dim = np.mean(est_a[mask_dim, dim] - true_a[mask_dim, dim])
-            rmse_dim = np.sqrt(np.mean((est_a[mask_dim, dim] - true_a[mask_dim, dim])**2))
+            metrics_dim = dim_metrics[dim]
             ax_dim.set_xlabel("True a")
             ax_dim.set_ylabel("Est a")
-            ax_dim.set_title(f"{dim_label}\nBias {bias_dim:.3f} RMSE {rmse_dim:.3f}")
+            ax_dim.set_title(
+                f"{dim_label}\nBias {metrics_dim['Mean Bias']:.3f} RMSE {metrics_dim['RMSE']:.3f} r {metrics_dim['Corr']:.3f}"
+            )
             ax_dim.grid(True, linestyle='--', alpha=0.4)
             st.pyplot(fig_dim)
-        st.markdown(f"**Overall (All D) Bias:** {bias_a:.3f} | **RMSE:** {rmse_a:.3f}")
+        st.markdown(
+            "**Overall (All D):** "
+            f"Bias {overall_a_metrics['Mean Bias']:.3f} | "
+            f"MAE {overall_a_metrics['MAE']:.3f} | "
+            f"RMSE {overall_a_metrics['RMSE']:.3f} | "
+            f"r {overall_a_metrics['Corr']:.3f}"
+        )
 
     with col2:
         st.subheader("Parameter Recovery: Intercept (d)")
@@ -562,14 +576,16 @@ if st.button("🚀 Run Simulation & Calibration", type="primary"):
         ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2)
         ax.set_xlabel("True d")
         ax.set_ylabel("Estimated d")
-        ax.set_title(f"Bias: {bias_d:.3f} | RMSE: {rmse_d:.3f}")
+        ax.set_title(
+            f"Bias: {d_metrics['Mean Bias']:.3f} | MAE: {d_metrics['MAE']:.3f} | RMSE: {d_metrics['RMSE']:.3f} | r: {d_metrics['Corr']:.3f}"
+        )
         ax.grid(True, linestyle='--', alpha=0.5)
         st.pyplot(fig)
 
     st.subheader("Convergence Trace (Complete Data Log-Likelihood)")
     fig_conv, ax_conv = plt.subplots(figsize=(10, 3))
-    ax_conv.plot(mhrm.loss_history, lw=2)
-    ax_conv.set_xlabel("Iteration (Every 5th)")
+    ax_conv.plot(mhrm.iteration_history, mhrm.loss_history, lw=2)
+    ax_conv.set_xlabel("Iteration")
     ax_conv.set_ylabel("Approx Log-Likelihood")
     ax_conv.set_title("Optimization Trajectory")
     st.pyplot(fig_conv)
@@ -610,13 +626,15 @@ if st.button("🚀 Run Simulation & Calibration", type="primary"):
             ax_th.legend(fontsize='small')
             st.pyplot(fig_th)
 
-    # Bias / RMSE Summary Table
-    st.subheader("Mean Bias & RMSE Summary")
+    # Recovery summary table
+    st.subheader("Recovery Summary")
     st.dataframe(df_bias_rmse.style.format({
         'Mean True': '{:.3f}',
         'Mean Est': '{:.3f}',
         'Mean Bias': '{:.3f}',
+        'MAE': '{:.3f}',
         'RMSE': '{:.3f}'
+        , 'Corr': '{:.3f}'
     }))
 
     # -------------------------------------------------
@@ -655,8 +673,7 @@ if st.button("🚀 Run Simulation & Calibration", type="primary"):
         # General factor is column 0
         general_true = true_a[:, 0]
         general_est = est_a[:, 0]
-        general_bias = general_est - general_true
-        general_rmse = np.sqrt(np.mean((general_bias)**2))
+        general_metrics = summarize_recovery(general_true, general_est)
         # Specifics are columns 1..D_effective-1
         specific_rows = []
         for dim in range(1, mhrm.D):
@@ -667,26 +684,29 @@ if st.button("🚀 Run Simulation & Calibration", type="primary"):
                 continue
             spec_true_masked = spec_true[mask]
             spec_est_masked = est_a[mask, dim]
-            bias = np.mean(spec_est_masked - spec_true_masked)
-            rmse = np.sqrt(np.mean((spec_est_masked - spec_true_masked)**2))
+            spec_metrics = summarize_recovery(spec_true_masked, spec_est_masked)
             specific_rows.append({
                 'Specific Factor': f'SF {dim}',
-                'Mean True a': np.mean(spec_true_masked),
-                'Mean Est a': np.mean(spec_est_masked),
-                'Mean Bias': bias,
-                'RMSE': rmse,
+                **spec_metrics,
                 'Items': int(np.sum(mask))
             })
         df_general = pd.DataFrame({
-            'Metric': ['Mean True a', 'Mean Est a', 'Mean Bias', 'RMSE'],
-            'General Factor': [np.mean(general_true), np.mean(general_est), np.mean(general_bias), general_rmse]
+            'Metric': ['Mean True', 'Mean Est', 'Mean Bias', 'MAE', 'RMSE', 'Corr'],
+            'General Factor': [
+                general_metrics['Mean True'],
+                general_metrics['Mean Est'],
+                general_metrics['Mean Bias'],
+                general_metrics['MAE'],
+                general_metrics['RMSE'],
+                general_metrics['Corr']
+            ]
         })
         st.markdown("**General Factor Summary**")
         st.dataframe(df_general.style.format({'General Factor': '{:.3f}'}))
         if specific_rows:
             st.markdown("**Specific Factor Summaries**")
             df_specific = pd.DataFrame(specific_rows)
-            st.dataframe(df_specific.style.format({'Mean True a': '{:.3f}', 'Mean Est a': '{:.3f}', 'Mean Bias': '{:.3f}', 'RMSE': '{:.3f}'}))
+            st.dataframe(df_specific.style.format({'Mean True': '{:.3f}', 'Mean Est': '{:.3f}', 'Mean Bias': '{:.3f}', 'MAE': '{:.3f}', 'RMSE': '{:.3f}', 'Corr': '{:.3f}'}))
 
     # DataFrame Display
     st.subheader("Parameter Table (All Items)")
