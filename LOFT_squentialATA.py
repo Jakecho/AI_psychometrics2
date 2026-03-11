@@ -482,7 +482,7 @@ def _render_similarity_heatmap(forms_list):
     ))
     fig.update_layout(
         title="Form Similarity Heatmap (Jaccard Index)",
-        height=max(350, 50 * n + 150),
+        height=400,
         xaxis=dict(visible=False),
         yaxis=dict(autorange='reversed', visible=False),
         margin=dict(t=60, b=20, l=20, r=20),
