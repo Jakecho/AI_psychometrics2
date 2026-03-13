@@ -1,0 +1,28 @@
+graph TD
+    SME((Subject Matter<br/>Expert)) <-->|Guidance & Review| Interface[Interactive Toolkit Dashboard]
+    
+    subgraph Multi-Agent AI Engine
+    Encoder[1. Encoder Agent<br/>Deconstruct] --> Decoder[2. Decoder Agent<br/>Reconstruct]
+    Decoder --> Diffusion[3. Diffusion Agent<br/>Distractor Modeling]
+    Diffusion --> Rationale[4. Rationale Agent<br/>Validation]
+    end
+    
+    subgraph Knowledge & Databases
+    RAG[RAG Source Grounding]
+    VDB[(Vector Database)]
+    RDB[(Relational Database)]
+    end
+    
+    Interface <--> Encoder
+    Interface <--> Decoder
+    Interface <--> Diffusion
+    Interface <--> Rationale
+    
+    Rationale --> Output[(Final Banked Item)]
+    
+    RAG -.-> Encoder
+    RAG -.-> Rationale
+    VDB -.-> Diffusion
+    RDB -.-> Interface
+    
+    Interface -.->|SME Feedback Trains AI| AI_Model((Continuous<br/>AI Training))

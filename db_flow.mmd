@@ -1,0 +1,8 @@
+graph BT
+    Process[4-Agent AIG Engine]
+    
+    LLM[Large Language Models<br/>Reasoning Core] --> Process
+    RAG[RAG Layer<br/>Source Grounding] --> LLM
+    
+    VectorDB[(Vector Database)] -. "Semantic/Math Search<br/>Key Features & Misconceptions" .-> RAG
+    RelationalDB[(Relational DB)] -. "Meta-Tag Search<br/>Workflow & Item Tracking" .-> Process

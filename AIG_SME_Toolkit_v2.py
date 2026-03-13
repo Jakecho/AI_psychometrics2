@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 AIG SME Toolkit – Enhanced Streamlit GUI
-Deconstruct & Reconstruct + Key Feature Venn Diagram
+Deconstruct & Reconstruct + Cognitive Misconception Mapping (CMM)
 
 Features:
 - Transparent LLM reasoning with expandable rationales
@@ -64,7 +64,7 @@ Evidence base:
 - Item modeling research (Gierl, Haladyna): generative frameworks preserve psychometric properties
 - Educational taxonomy alignment (Anderson & Krathwohl): explicit cognitive level targeting
 
-2. KEY FEATURE VENN DIAGRAM METHOD FOR DISTRACTOR MODELING
+2. COGNITIVE MISCONCEPTION MAPPING (CMM) FOR DISTRACTOR MODELING
 
 Rationale:
 Effective distractors are the cornerstone of valid multiple-choice items, yet they are
@@ -73,8 +73,8 @@ notoriously difficult to generate automatically. Poor distractors are either:
 - Too similar to the key (creating multiple defensible answers)
 - Random/arbitrary (lacking diagnostic value for identifying misconceptions)
 
-The Key Feature Venn Diagram method models distractors as OVERLAPPING FEATURE SETS
-in the knowledge space, analogous to intersecting circles in a Venn diagram.
+The Cognitive Misconception Mapping (CMM) models distractors as OVERLAPPING FEATURE SETS
+in the knowledge space, analogous to feature mapping in CMM.
 
 Conceptual model:
 - The CORRECT option represents a complete feature set: [A, B, C, D]
@@ -116,7 +116,7 @@ Evidence base:
   correct and plausible-but-incorrect
 
 Integration:
-When combined, D&R + Key Feature Venn Diagram creates a principled AIG system where:
+When combined, D&R + Cognitive Misconception Mapping (CMM) creates a principled AIG system where:
 - Items target specific cognitive levels (via deconstruction of mental operations)
 - Items test intended knowledge (via content feature specification)
 - Distractors are model-based (via feature overlap engineering)
@@ -536,9 +536,9 @@ def run_distractor_agent(
 ) -> Optional[DistractorOutput]:
     """
     Distractor Agent (Mode A & C)
-    Generates structured options based on the Key Feature Venn Diagram method.
+    Generates structured options based on the Cognitive Misconception Mapping (CMM).
     """
-    system_prompt = "You are an expert psychometrician and item writer. Your job is to create plausible distractors and one correct answer using the Key Feature Venn Diagram method."
+    system_prompt = "You are an expert psychometrician and item writer. Your job is to create plausible distractors and one correct answer using the Cognitive Misconception Mapping (CMM)."
     
     source_instruction = f"\n\nSource material to ground content:\n{sources}" if sources else ""
     template_instruction = f"\n\nREFERENCE STRUCTURE:\n{sample_template}" if sample_template else ""
@@ -719,14 +719,14 @@ def generate_options_with_reasoning(
     model: str = "gpt-4o",
     temperature: float = 0.5
 ) -> Dict[str, Any]:
-    """Generate 11 options (including 1 likely correct) using Key Feature Venn Diagram Method"""
+    """Generate 11 options (including 1 likely correct) using Cognitive Misconception Mapping (CMM)"""
     
     source_instruction = f"\n\nSource material for validation:\n{source_context}" if source_context else ""
     
     template_instruction = f"\n\nREFERENCE: Analyze this sample item for option style and plausibility patterns:\n{sample_template}" if sample_template else ""
     
     prompt = f"""
-Using the KEY FEATURE VENN DIAGRAM METHOD to create model-based options.
+Using the COGNITIVE MISCONCEPTION MAPPING (CMM) to create model-based options.
 
 Scenario: {stem}
 Question: {question}{source_instruction}{template_instruction}
@@ -742,7 +742,7 @@ TASK:
    - Vary the degree of overlap (some close near-misses, some obvious errors)
    - Ensure each targets a specific misconception or incomplete reasoning
 
-3) EXPLAIN the Venn diagram logic for EACH option:
+3) EXPLAIN the CMM logic for EACH option:
    - Which features does it share? (overlap = plausibility)
    - Which critical feature does it lack or violate? (gap = why it might be wrong)
    - What clinical reasoning does it represent?
@@ -760,7 +760,7 @@ Output as JSON:
       "is_likely_correct": true/false,
       "shared_features": ["feature A", "feature B"],
       "violated_feature": "critical feature X (or 'none' if likely correct)",
-      "venn_reasoning": "This shares [features] making it plausible, but violates [feature] because...",
+      "cmm_reasoning": "This shares [features] making it plausible, but violates [feature] because...",
       "clinical_reasoning": "What this option represents clinically"
     }},
     ... ({num_options} total)
@@ -788,7 +788,7 @@ def regenerate_single_option(
     temperature: float = 0.6
 ) -> Optional[DistractorOption]:
     """Regenerate a single option avoiding duplicates using structured output."""
-    system_prompt = "You are an expert psychometrician. Generate ONE new option using the Key Feature Venn Diagram Method."
+    system_prompt = "You are an expert psychometrician. Generate ONE new option using the Cognitive Misconception Mapping (CMM)."
     
     user_input = f"""
 Scenario: {stem}
@@ -944,7 +944,7 @@ def main():
     """, unsafe_allow_html=True)
     
     st.title("🧠 AIG SME Toolkit - Enhanced")
-    st.markdown("**Transparent High-Order Item Generation with D&R + Key Feature Venn Diagram**")
+    st.markdown("**Transparent High-Order Item Generation with D&R + Cognitive Misconception Mapping (CMM)**")
     
     # Sidebar - Configuration
     with st.sidebar:
@@ -1265,7 +1265,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
                                     "is_likely_correct": opt.is_correct,
                                     "shared_features": opt.shared_features,
                                     "violated_feature": opt.violated_feature,
-                                    "venn_reasoning": opt.misconception_mapped,  # mapped to keep UI logic intact
+                                    "cmm_reasoning": opt.misconception_mapped,  # mapped to keep UI logic intact
                                     "clinical_reasoning": opt.misconception_mapped # mapped to keep UI logic intact
                                 })
 
@@ -1492,7 +1492,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
                                         "is_likely_correct": new_opt.is_correct,
                                         "shared_features": new_opt.shared_features,
                                         "violated_feature": new_opt.violated_feature,
-                                        "venn_reasoning": new_opt.misconception_mapped,
+                                        "cmm_reasoning": new_opt.misconception_mapped,
                                         "clinical_reasoning": new_opt.misconception_mapped
                                     }
                                     st.session_state.item_data['options'][i] = mapped_opt
@@ -1511,13 +1511,13 @@ This helps the LLM understand your preferred item format and cognitive complexit
                                     st.session_state.validations[f'opt_{i}'] = val_result
                                     st.rerun()
                     
-                    # Show Venn diagram reasoning
-                    with st.expander(f"🔍 Key Feature Venn Diagram Reasoning - Option {option_label}"):
+                    # Show CMM reasoning
+                    with st.expander(f"🔍 Cognitive Misconception Mapping (CMM) Reasoning - Option {option_label}"):
                         if opt.get('is_likely_correct'):
                             st.success("🎯 **LLM suggests this as the likely CORRECT answer**")
                         st.write(f"**Shared Features (Plausibility):** {', '.join(opt.get('shared_features', []))}")
                         st.write(f"**Violated Feature:** {opt.get('violated_feature', 'None')}")
-                        st.write(f"**Venn Reasoning:** {opt.get('venn_reasoning', 'N/A')}")
+                        st.write(f"**CMM Reasoning:** {opt.get('cmm_reasoning', 'N/A')}")
                         st.write(f"**Clinical Reasoning:** {opt.get('clinical_reasoning', 'N/A')}")
                     
                     # Show validation
@@ -1620,9 +1620,9 @@ This helps the LLM understand your preferred item format and cognitive complexit
                     st.session_state.selected_options = set()
     
     # ============================================================
-    # TAB 3: Reasoning View
+    # TAB 4: Reasoning View
     # ============================================================
-    with tab3:
+    with tab4:
         st.header("🔍 Modeling Approaches - Transparent Reasoning")
         
         if st.session_state.item_data:
@@ -1673,7 +1673,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
             
             st.divider()
             
-            st.subheader("2️⃣ Key Feature Venn Diagram Method")
+            st.subheader("2️⃣ Cognitive Misconception Mapping (CMM)")
             st.markdown("**Rationale**: Creates plausible distractors by modeling overlapping feature sets - each distractor shares some (but not all) critical features with the correct answer.")
             
             st.markdown("**🔑 Correct Answer Key Features**")
@@ -1700,8 +1700,8 @@ This helps the LLM understand your preferred item format and cognitive complexit
                         else:
                             st.error(violated)
                     
-                    st.markdown("**💡 Venn Diagram Logic**")
-                    st.info(opt.get('venn_reasoning', 'N/A'))
+                    st.markdown("**💡 CMM Logic**")
+                    st.info(opt.get('cmm_reasoning', 'N/A'))
                     
                     st.markdown("**🎯 Clinical Reasoning**")
                     st.write(opt.get('clinical_reasoning', 'N/A'))
@@ -1803,7 +1803,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
                         st.write(opt['text'])
                         
                         # KFVD Reasoning
-                        with st.expander(f"🔍 Key Feature Venn Diagram Analysis - Option {option_letter}"):
+                        with st.expander(f"🔍 Cognitive Misconception Mapping (CMM) Analysis - Option {option_letter}"):
                             if is_correct:
                                 st.markdown("**🎯 This is the CORRECT answer**")
                             
@@ -1820,7 +1820,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
                                 st.success("No features violated - this is the correct answer")
                             
                             st.markdown("**💭 Clinical Reasoning:**")
-                            st.info(opt.get('venn_reasoning', 'N/A'))
+                            st.info(opt.get('cmm_reasoning', 'N/A'))
                             
                             st.markdown("**🎓 What This Tests:**")
                             st.write(opt.get('clinical_reasoning', 'N/A'))
@@ -2087,7 +2087,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
                             "messages": [
                                 {
                                     "role": "system",
-                                    "content": "You are an expert NCLEX item writer using Deconstruct & Reconstruct and Key Feature Venn Diagram methods."
+                                    "content": "You are an expert NCLEX item writer using Deconstruct & Reconstruct and Cognitive Misconception Mapping (CMM)s."
                                 },
                                 {
                                     "role": "user",
@@ -2157,7 +2157,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
     st.divider()
     st.markdown("""
     **AIG SME Toolkit - Enhanced** | Powered by OpenAI LLMs  
-    *Transparent reasoning with Deconstruct & Reconstruct + Key Feature Venn Diagram*
+    *Transparent reasoning with Deconstruct & Reconstruct + Cognitive Misconception Mapping (CMM)*
     """)
 
 if __name__ == "__main__":
