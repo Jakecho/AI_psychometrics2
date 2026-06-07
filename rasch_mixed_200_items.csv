@@ -1,0 +1,201 @@
+Item_ID,Item_Type,Difficulty,Step_Difficulties,Label
+Item_001,Dichotomous,0.4967,,Dichotomous Item 1 (b = 0.50)
+Item_002,Dichotomous,-0.1383,,Dichotomous Item 2 (b = -0.14)
+Item_003,Dichotomous,0.6477,,Dichotomous Item 3 (b = 0.65)
+Item_004,Dichotomous,1.523,,Dichotomous Item 4 (b = 1.52)
+Item_005,Dichotomous,-0.2342,,Dichotomous Item 5 (b = -0.23)
+Item_006,Dichotomous,-0.2341,,Dichotomous Item 6 (b = -0.23)
+Item_007,Dichotomous,1.5792,,Dichotomous Item 7 (b = 1.58)
+Item_008,Dichotomous,0.7674,,Dichotomous Item 8 (b = 0.77)
+Item_009,Dichotomous,-0.4695,,Dichotomous Item 9 (b = -0.47)
+Item_010,Dichotomous,0.5426,,Dichotomous Item 10 (b = 0.54)
+Item_011,Dichotomous,-0.4634,,Dichotomous Item 11 (b = -0.46)
+Item_012,Dichotomous,-0.4657,,Dichotomous Item 12 (b = -0.47)
+Item_013,Dichotomous,0.242,,Dichotomous Item 13 (b = 0.24)
+Item_014,Dichotomous,-1.9133,,Dichotomous Item 14 (b = -1.91)
+Item_015,Dichotomous,-1.7249,,Dichotomous Item 15 (b = -1.72)
+Item_016,Dichotomous,-0.5623,,Dichotomous Item 16 (b = -0.56)
+Item_017,Dichotomous,-1.0128,,Dichotomous Item 17 (b = -1.01)
+Item_018,Dichotomous,0.3142,,Dichotomous Item 18 (b = 0.31)
+Item_019,Dichotomous,-0.908,,Dichotomous Item 19 (b = -0.91)
+Item_020,Dichotomous,-1.4123,,Dichotomous Item 20 (b = -1.41)
+Item_021,Dichotomous,1.4656,,Dichotomous Item 21 (b = 1.47)
+Item_022,Dichotomous,-0.2258,,Dichotomous Item 22 (b = -0.23)
+Item_023,Dichotomous,0.0675,,Dichotomous Item 23 (b = 0.07)
+Item_024,Dichotomous,-1.4247,,Dichotomous Item 24 (b = -1.42)
+Item_025,Dichotomous,-0.5444,,Dichotomous Item 25 (b = -0.54)
+Item_026,Dichotomous,0.1109,,Dichotomous Item 26 (b = 0.11)
+Item_027,Dichotomous,-1.151,,Dichotomous Item 27 (b = -1.15)
+Item_028,Dichotomous,0.3757,,Dichotomous Item 28 (b = 0.38)
+Item_029,Dichotomous,-0.6006,,Dichotomous Item 29 (b = -0.60)
+Item_030,Dichotomous,-0.2917,,Dichotomous Item 30 (b = -0.29)
+Item_031,Dichotomous,-0.6017,,Dichotomous Item 31 (b = -0.60)
+Item_032,Dichotomous,1.8523,,Dichotomous Item 32 (b = 1.85)
+Item_033,Dichotomous,-0.0135,,Dichotomous Item 33 (b = -0.01)
+Item_034,Dichotomous,-1.0577,,Dichotomous Item 34 (b = -1.06)
+Item_035,Dichotomous,0.8225,,Dichotomous Item 35 (b = 0.82)
+Item_036,Dichotomous,-1.2208,,Dichotomous Item 36 (b = -1.22)
+Item_037,Dichotomous,0.2089,,Dichotomous Item 37 (b = 0.21)
+Item_038,Dichotomous,-1.9597,,Dichotomous Item 38 (b = -1.96)
+Item_039,Dichotomous,-1.3282,,Dichotomous Item 39 (b = -1.33)
+Item_040,Dichotomous,0.1969,,Dichotomous Item 40 (b = 0.20)
+Item_041,Dichotomous,0.7385,,Dichotomous Item 41 (b = 0.74)
+Item_042,Dichotomous,0.1714,,Dichotomous Item 42 (b = 0.17)
+Item_043,Dichotomous,-0.1156,,Dichotomous Item 43 (b = -0.12)
+Item_044,Dichotomous,-0.3011,,Dichotomous Item 44 (b = -0.30)
+Item_045,Dichotomous,-1.4785,,Dichotomous Item 45 (b = -1.48)
+Item_046,Dichotomous,-0.7198,,Dichotomous Item 46 (b = -0.72)
+Item_047,Dichotomous,-0.4606,,Dichotomous Item 47 (b = -0.46)
+Item_048,Dichotomous,1.0571,,Dichotomous Item 48 (b = 1.06)
+Item_049,Dichotomous,0.3436,,Dichotomous Item 49 (b = 0.34)
+Item_050,Dichotomous,-1.763,,Dichotomous Item 50 (b = -1.76)
+Item_051,Dichotomous,0.3241,,Dichotomous Item 51 (b = 0.32)
+Item_052,Dichotomous,-0.3851,,Dichotomous Item 52 (b = -0.39)
+Item_053,Dichotomous,-0.6769,,Dichotomous Item 53 (b = -0.68)
+Item_054,Dichotomous,0.6117,,Dichotomous Item 54 (b = 0.61)
+Item_055,Dichotomous,1.031,,Dichotomous Item 55 (b = 1.03)
+Item_056,Dichotomous,0.9313,,Dichotomous Item 56 (b = 0.93)
+Item_057,Dichotomous,-0.8392,,Dichotomous Item 57 (b = -0.84)
+Item_058,Dichotomous,-0.3092,,Dichotomous Item 58 (b = -0.31)
+Item_059,Dichotomous,0.3313,,Dichotomous Item 59 (b = 0.33)
+Item_060,Dichotomous,0.9755,,Dichotomous Item 60 (b = 0.98)
+Item_061,Dichotomous,-0.4792,,Dichotomous Item 61 (b = -0.48)
+Item_062,Dichotomous,-0.1857,,Dichotomous Item 62 (b = -0.19)
+Item_063,Dichotomous,-1.1063,,Dichotomous Item 63 (b = -1.11)
+Item_064,Dichotomous,-1.1962,,Dichotomous Item 64 (b = -1.20)
+Item_065,Dichotomous,0.8125,,Dichotomous Item 65 (b = 0.81)
+Item_066,Dichotomous,1.3562,,Dichotomous Item 66 (b = 1.36)
+Item_067,Dichotomous,-0.072,,Dichotomous Item 67 (b = -0.07)
+Item_068,Dichotomous,1.0035,,Dichotomous Item 68 (b = 1.00)
+Item_069,Dichotomous,0.3616,,Dichotomous Item 69 (b = 0.36)
+Item_070,Dichotomous,-0.6451,,Dichotomous Item 70 (b = -0.65)
+Item_071,Dichotomous,0.3614,,Dichotomous Item 71 (b = 0.36)
+Item_072,Dichotomous,1.538,,Dichotomous Item 72 (b = 1.54)
+Item_073,Dichotomous,-0.0358,,Dichotomous Item 73 (b = -0.04)
+Item_074,Dichotomous,1.5646,,Dichotomous Item 74 (b = 1.56)
+Item_075,Dichotomous,-2.6197,,Dichotomous Item 75 (b = -2.62)
+Item_076,Dichotomous,0.8219,,Dichotomous Item 76 (b = 0.82)
+Item_077,Dichotomous,0.087,,Dichotomous Item 77 (b = 0.09)
+Item_078,Dichotomous,-0.299,,Dichotomous Item 78 (b = -0.30)
+Item_079,Dichotomous,0.0918,,Dichotomous Item 79 (b = 0.09)
+Item_080,Dichotomous,-1.9876,,Dichotomous Item 80 (b = -1.99)
+Item_081,Dichotomous,-0.2197,,Dichotomous Item 81 (b = -0.22)
+Item_082,Dichotomous,0.3571,,Dichotomous Item 82 (b = 0.36)
+Item_083,Dichotomous,1.4779,,Dichotomous Item 83 (b = 1.48)
+Item_084,Dichotomous,-0.5183,,Dichotomous Item 84 (b = -0.52)
+Item_085,Dichotomous,-0.8085,,Dichotomous Item 85 (b = -0.81)
+Item_086,Dichotomous,-0.5018,,Dichotomous Item 86 (b = -0.50)
+Item_087,Dichotomous,0.9154,,Dichotomous Item 87 (b = 0.92)
+Item_088,Dichotomous,0.3288,,Dichotomous Item 88 (b = 0.33)
+Item_089,Dichotomous,-0.5298,,Dichotomous Item 89 (b = -0.53)
+Item_090,Dichotomous,0.5133,,Dichotomous Item 90 (b = 0.51)
+Item_091,Dichotomous,0.0971,,Dichotomous Item 91 (b = 0.10)
+Item_092,Dichotomous,0.9686,,Dichotomous Item 92 (b = 0.97)
+Item_093,Dichotomous,-0.7021,,Dichotomous Item 93 (b = -0.70)
+Item_094,Dichotomous,-0.3277,,Dichotomous Item 94 (b = -0.33)
+Item_095,Dichotomous,-0.3921,,Dichotomous Item 95 (b = -0.39)
+Item_096,Dichotomous,-1.4635,,Dichotomous Item 96 (b = -1.46)
+Item_097,Dichotomous,0.2961,,Dichotomous Item 97 (b = 0.30)
+Item_098,Dichotomous,0.2611,,Dichotomous Item 98 (b = 0.26)
+Item_099,Dichotomous,0.0051,,Dichotomous Item 99 (b = 0.01)
+Item_100,Dichotomous,-0.2346,,Dichotomous Item 100 (b = -0.23)
+Item_101,Polytomous,-0.9323,-1.2;0.0;1.2,"RSM Item 101 (Location = -0.93, 4 categories)"
+Item_102,Polytomous,-0.1365,-1.2;0.0;1.2,"RSM Item 102 (Location = -0.14, 4 categories)"
+Item_103,Polytomous,-0.0742,-1.2;0.0;1.2,"RSM Item 103 (Location = -0.07, 4 categories)"
+Item_104,Polytomous,-0.4418,-1.2;0.0;1.2,"RSM Item 104 (Location = -0.44, 4 categories)"
+Item_105,Polytomous,0.071,-1.2;0.0;1.2,"RSM Item 105 (Location = 0.07, 4 categories)"
+Item_106,Polytomous,0.5232,-1.2;0.0;1.2,"RSM Item 106 (Location = 0.52, 4 categories)"
+Item_107,Polytomous,1.7089,-1.2;0.0;1.2,"RSM Item 107 (Location = 1.71, 4 categories)"
+Item_108,Polytomous,0.3397,-1.2;0.0;1.2,"RSM Item 108 (Location = 0.34, 4 categories)"
+Item_109,Polytomous,0.406,-1.2;0.0;1.2,"RSM Item 109 (Location = 0.41, 4 categories)"
+Item_110,Polytomous,0.1404,-1.2;0.0;1.2,"RSM Item 110 (Location = 0.14, 4 categories)"
+Item_111,Polytomous,-1.335,-1.2;0.0;1.2,"RSM Item 111 (Location = -1.34, 4 categories)"
+Item_112,Polytomous,0.1788,-1.2;0.0;1.2,"RSM Item 112 (Location = 0.18, 4 categories)"
+Item_113,Polytomous,0.2482,-1.2;0.0;1.2,"RSM Item 113 (Location = 0.25, 4 categories)"
+Item_114,Polytomous,2.1706,-1.2;0.0;1.2,"RSM Item 114 (Location = 2.17, 4 categories)"
+Item_115,Polytomous,0.0461,-1.2;0.0;1.2,"RSM Item 115 (Location = 0.05, 4 categories)"
+Item_116,Polytomous,0.4412,-1.2;0.0;1.2,"RSM Item 116 (Location = 0.44, 4 categories)"
+Item_117,Polytomous,0.1722,-1.2;0.0;1.2,"RSM Item 117 (Location = 0.17, 4 categories)"
+Item_118,Polytomous,-0.7349,-1.2;0.0;1.2,"RSM Item 118 (Location = -0.73, 4 categories)"
+Item_119,Polytomous,1.1143,-1.2;0.0;1.2,"RSM Item 119 (Location = 1.11, 4 categories)"
+Item_120,Polytomous,0.8015,-1.2;0.0;1.2,"RSM Item 120 (Location = 0.80, 4 categories)"
+Item_121,Polytomous,0.8328,-1.2;0.0;1.2,"RSM Item 121 (Location = 0.83, 4 categories)"
+Item_122,Polytomous,-0.5275,-1.2;0.0;1.2,"RSM Item 122 (Location = -0.53, 4 categories)"
+Item_123,Polytomous,1.3222,-1.2;0.0;1.2,"RSM Item 123 (Location = 1.32, 4 categories)"
+Item_124,Polytomous,-0.9215,-1.2;0.0;1.2,"RSM Item 124 (Location = -0.92, 4 categories)"
+Item_125,Polytomous,0.6695,-1.2;0.0;1.2,"RSM Item 125 (Location = 0.67, 4 categories)"
+Item_126,Polytomous,1.9524,-1.2;0.0;1.2,"RSM Item 126 (Location = 1.95, 4 categories)"
+Item_127,Polytomous,-0.5924,-1.2;0.0;1.2,"RSM Item 127 (Location = -0.59, 4 categories)"
+Item_128,Polytomous,-0.253,-1.2;0.0;1.2,"RSM Item 128 (Location = -0.25, 4 categories)"
+Item_129,Polytomous,0.2797,-1.2;0.0;1.2,"RSM Item 129 (Location = 0.28, 4 categories)"
+Item_130,Polytomous,-0.2028,-1.2;0.0;1.2,"RSM Item 130 (Location = -0.20, 4 categories)"
+Item_131,Polytomous,-1.0405,-1.2;0.0;1.2,"RSM Item 131 (Location = -1.04, 4 categories)"
+Item_132,Polytomous,0.2549,-1.2;0.0;1.2,"RSM Item 132 (Location = 0.25, 4 categories)"
+Item_133,Polytomous,-0.6498,-1.2;0.0;1.2,"RSM Item 133 (Location = -0.65, 4 categories)"
+Item_134,Polytomous,0.5789,-1.2;0.0;1.2,"RSM Item 134 (Location = 0.58, 4 categories)"
+Item_135,Polytomous,-0.5355,-1.2;0.0;1.2,"RSM Item 135 (Location = -0.54, 4 categories)"
+Item_136,Polytomous,1.4399,-1.2;0.0;1.2,"RSM Item 136 (Location = 1.44, 4 categories)"
+Item_137,Polytomous,-0.4266,-1.2;0.0;1.2,"RSM Item 137 (Location = -0.43, 4 categories)"
+Item_138,Polytomous,-0.0576,-1.2;0.0;1.2,"RSM Item 138 (Location = -0.06, 4 categories)"
+Item_139,Polytomous,0.8508,-1.2;0.0;1.2,"RSM Item 139 (Location = 0.85, 4 categories)"
+Item_140,Polytomous,-0.7847,-1.2;0.0;1.2,"RSM Item 140 (Location = -0.78, 4 categories)"
+Item_141,Polytomous,0.382,-1.2;0.0;1.2,"RSM Item 141 (Location = 0.38, 4 categories)"
+Item_142,Polytomous,1.2457,-1.2;0.0;1.2,"RSM Item 142 (Location = 1.25, 4 categories)"
+Item_143,Polytomous,-1.086,-1.2;0.0;1.2,"RSM Item 143 (Location = -1.09, 4 categories)"
+Item_144,Polytomous,0.3477,-1.2;0.0;1.2,"RSM Item 144 (Location = 0.35, 4 categories)"
+Item_145,Polytomous,0.4079,-1.2;0.0;1.2,"RSM Item 145 (Location = 0.41, 4 categories)"
+Item_146,Polytomous,0.8255,-1.2;0.0;1.2,"RSM Item 146 (Location = 0.83, 4 categories)"
+Item_147,Polytomous,-0.7896,-1.2;0.0;1.2,"RSM Item 147 (Location = -0.79, 4 categories)"
+Item_148,Polytomous,-0.8564,-1.2;0.0;1.2,"RSM Item 148 (Location = -0.86, 4 categories)"
+Item_149,Polytomous,0.6176,-1.2;0.0;1.2,"RSM Item 149 (Location = 0.62, 4 categories)"
+Item_150,Polytomous,0.4376,-1.2;0.0;1.2,"RSM Item 150 (Location = 0.44, 4 categories)"
+Item_151,Polytomous,,-0.5319;-0.2994;1.1418,"PCM Item 151 (Absolute PCM steps, 4 categories)"
+Item_152,Polytomous,,0.0886;0.7138;1.7922,"PCM Item 152 (Absolute PCM steps, 4 categories)"
+Item_153,Polytomous,,-2.0064;-0.8427,"PCM Item 153 (Absolute PCM steps, 3 categories)"
+Item_154,Polytomous,,-1.4592;-0.9857;1.4699,"PCM Item 154 (Absolute PCM steps, 4 categories)"
+Item_155,Polytomous,,0.1648;0.4554;0.7635,"PCM Item 155 (Absolute PCM steps, 4 categories)"
+Item_156,Polytomous,,-0.2958;-0.1946,"PCM Item 156 (Absolute PCM steps, 3 categories)"
+Item_157,Polytomous,,-1.1846;-0.7373;1.0025,"PCM Item 157 (Absolute PCM steps, 4 categories)"
+Item_158,Polytomous,,0.5437;0.7966;1.4287,"PCM Item 158 (Absolute PCM steps, 4 categories)"
+Item_159,Polytomous,,-1.3435;-0.8307;-0.5741;0.7509,"PCM Item 159 (Absolute PCM steps, 5 categories)"
+Item_160,Polytomous,,-0.9942;0.5796,"PCM Item 160 (Absolute PCM steps, 3 categories)"
+Item_161,Polytomous,,-0.4409;0.6232;2.2977,"PCM Item 161 (Absolute PCM steps, 4 categories)"
+Item_162,Polytomous,,0.433;1.6571,"PCM Item 162 (Absolute PCM steps, 3 categories)"
+Item_163,Polytomous,,-1.2547;-1.022;-0.7094;-0.3716,"PCM Item 163 (Absolute PCM steps, 5 categories)"
+Item_164,Polytomous,,-0.1489;1.2697;1.6476,"PCM Item 164 (Absolute PCM steps, 4 categories)"
+Item_165,Polytomous,,0.0984;1.2331;1.9004;2.3102,"PCM Item 165 (Absolute PCM steps, 5 categories)"
+Item_166,Polytomous,,-0.541;-0.0727,"PCM Item 166 (Absolute PCM steps, 3 categories)"
+Item_167,Polytomous,,1.7109;1.8818;2.0203,"PCM Item 167 (Absolute PCM steps, 4 categories)"
+Item_168,Polytomous,,-2.2758;-1.9058;-0.6049,"PCM Item 168 (Absolute PCM steps, 4 categories)"
+Item_169,Polytomous,,0.2647;0.3775;1.9208,"PCM Item 169 (Absolute PCM steps, 4 categories)"
+Item_170,Polytomous,,-1.0702;-0.5509;0.4807,"PCM Item 170 (Absolute PCM steps, 4 categories)"
+Item_171,Polytomous,,-1.7781;-1.7576;-0.0971,"PCM Item 171 (Absolute PCM steps, 4 categories)"
+Item_172,Polytomous,,-0.8529;-0.2216;0.6508,"PCM Item 172 (Absolute PCM steps, 4 categories)"
+Item_173,Polytomous,,-0.9109;1.0321,"PCM Item 173 (Absolute PCM steps, 3 categories)"
+Item_174,Polytomous,,0.6017;0.8677;1.617,"PCM Item 174 (Absolute PCM steps, 4 categories)"
+Item_175,Polytomous,,-0.977;-0.4726;0.5961,"PCM Item 175 (Absolute PCM steps, 4 categories)"
+Item_176,Polytomous,,-1.7055;-1.3951;-0.6632;0.1174,"PCM Item 176 (Absolute PCM steps, 5 categories)"
+Item_177,Polytomous,,-1.6494;-1.368,"PCM Item 177 (Absolute PCM steps, 3 categories)"
+Item_178,Polytomous,,-1.7449;-0.3787;0.5104,"PCM Item 178 (Absolute PCM steps, 4 categories)"
+Item_179,Polytomous,,0.7864;0.9585,"PCM Item 179 (Absolute PCM steps, 3 categories)"
+Item_180,Polytomous,,-2.0345;-1.9191;-1.3694;-0.6969,"PCM Item 180 (Absolute PCM steps, 5 categories)"
+Item_181,Polytomous,,-1.3586;0.6457,"PCM Item 181 (Absolute PCM steps, 3 categories)"
+Item_182,Polytomous,,-1.1633;0.018,"PCM Item 182 (Absolute PCM steps, 3 categories)"
+Item_183,Polytomous,,-1.594;-0.3441;0.2112;1.1093,"PCM Item 183 (Absolute PCM steps, 5 categories)"
+Item_184,Polytomous,,-1.8801;-0.4229;0.8743,"PCM Item 184 (Absolute PCM steps, 4 categories)"
+Item_185,Polytomous,,0.8523;1.8364,"PCM Item 185 (Absolute PCM steps, 3 categories)"
+Item_186,Polytomous,,-0.7153;-0.6843;0.379,"PCM Item 186 (Absolute PCM steps, 4 categories)"
+Item_187,Polytomous,,-0.8531;1.195;1.2233,"PCM Item 187 (Absolute PCM steps, 4 categories)"
+Item_188,Polytomous,,-0.075;-0.0513;0.1268;1.2594,"PCM Item 188 (Absolute PCM steps, 5 categories)"
+Item_189,Polytomous,,-2.2463;-2.1766;-0.4109,"PCM Item 189 (Absolute PCM steps, 4 categories)"
+Item_190,Polytomous,,-0.5715;1.8021,"PCM Item 190 (Absolute PCM steps, 3 categories)"
+Item_191,Polytomous,,-0.3637;0.67,"PCM Item 191 (Absolute PCM steps, 3 categories)"
+Item_192,Polytomous,,-0.0372;0.2765;1.6357;1.8409,"PCM Item 192 (Absolute PCM steps, 5 categories)"
+Item_193,Polytomous,,0.4785;0.9457,"PCM Item 193 (Absolute PCM steps, 3 categories)"
+Item_194,Polytomous,,-0.2644;-0.2083;0.6514,"PCM Item 194 (Absolute PCM steps, 4 categories)"
+Item_195,Polytomous,,-0.2896;1.2154,"PCM Item 195 (Absolute PCM steps, 3 categories)"
+Item_196,Polytomous,,0.4458;1.0014;1.965,"PCM Item 196 (Absolute PCM steps, 4 categories)"
+Item_197,Polytomous,,-2.1196;-1.2153;0.2614;0.5956,"PCM Item 197 (Absolute PCM steps, 5 categories)"
+Item_198,Polytomous,,-0.7613;0.4365;0.468,"PCM Item 198 (Absolute PCM steps, 4 categories)"
+Item_199,Polytomous,,-0.8689;0.1626,"PCM Item 199 (Absolute PCM steps, 3 categories)"
+Item_200,Polytomous,,-0.4849;1.6103,"PCM Item 200 (Absolute PCM steps, 3 categories)"

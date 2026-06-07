@@ -1667,7 +1667,8 @@ This helps the LLM understand your preferred item format and cognitive complexit
                     st.write(reasoning.get('why_appropriate', 'N/A'))
                     
                     st.markdown("**🔗 Scenario Connection:**")
-                    st.caption(reasoning.get('scenario_connection', 'N/A'))
+                    # Backward-compatible key handling: older payloads use stem_connection.
+                    st.caption(reasoning.get('scenario_connection') or reasoning.get('stem_connection', 'N/A'))
                 else:
                     st.info("Generate question to view reasoning")
             
@@ -1706,7 +1707,7 @@ This helps the LLM understand your preferred item format and cognitive complexit
                     st.markdown("**🎯 Clinical Reasoning**")
                     st.write(opt.get('clinical_reasoning', 'N/A'))
         else:
-            st.info("Generate an item in the 'Item Creation' tab to view reasoning transparency.")
+            st.info("Generate an item in the 'Mode A/C: Item Generation' tab to view reasoning transparency.")
     
     # ============================================================
     # TAB 5: Finalized Items

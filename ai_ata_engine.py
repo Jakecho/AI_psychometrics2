@@ -222,9 +222,13 @@ def assemble_single_form_mip(
     }
 
 
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 import json
+
+try:
+    from langchain_ollama import ChatOllama
+except ImportError:
+    ChatOllama = None
 
 class DomainConstraint(BaseModel):
     min: int = Field(description="Minimum number of items from this domain")
@@ -290,6 +294,8 @@ def semantic_ai_constraint_builder(
     
     try:
         if llm_provider.lower() == 'ollama':
+            if ChatOllama is None:
+                raise ImportError("langchain_ollama is not installed")
             llm = ChatOllama(model="qwen2.5:7b", temperature=0.0, format="json")
             prompt = f"{system_instruction}\\nOutput pure JSON matching the FormConstraints schema.\\nUSER REQUEST: {user_prompt}"
             resp = llm.invoke(prompt)
@@ -337,6 +343,8 @@ Be concise (2-3 sentences max). This is diagnostic only — the user will decide
 
     try:
         if llm_provider.lower() == 'ollama':
+            if ChatOllama is None:
+                raise ImportError("langchain_ollama is not installed")
             llm = ChatOllama(model="qwen2.5:7b", temperature=0.2)
             resp = llm.invoke(prompt)
             return resp.content.strip()
@@ -383,6 +391,8 @@ Comment on: form parallelism (are forms similar in difficulty/information?), ban
 
     try:
         if llm_provider.lower() == 'ollama':
+            if ChatOllama is None:
+                raise ImportError("langchain_ollama is not installed")
             llm = ChatOllama(model="qwen2.5:7b", temperature=0.3)
             resp = llm.invoke(prompt)
             return resp.content.strip()
