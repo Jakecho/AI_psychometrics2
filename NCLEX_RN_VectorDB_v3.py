@@ -32,7 +32,7 @@ RESULT_COLUMNS = [
     'item_id', 'domain', 'topic', 'stem',
     'choice_A', 'choice_B', 'choice_C', 'choice_D',
     'key', 'rationale', 'rasch_b', 'pvalue',
-    'point_biserial', 'similarity_score'
+    'point_biserial', 'enemy', 'similarity_score'
 ]
 
 # ==================== Helper Functions ====================
@@ -42,6 +42,18 @@ def load_csv_data(path: str = CSV_PATH):
     """Load item-bank CSV and parse the stored embedding column."""
     df = pd.read_csv(path)
     df = df.where(pd.notnull(df), None)
+
+    # Merge enemy column from item_bank_clean.csv if missing in hosted CSV
+    if 'enemy' not in df.columns and os.path.exists('item_bank_clean.csv'):
+        try:
+            clean_df = pd.read_csv('item_bank_clean.csv', usecols=['item_id', 'enemy'])
+            df['item_id_str'] = df['item_id'].astype(str)
+            clean_df['item_id_str'] = clean_df['item_id'].astype(str)
+            df = df.merge(clean_df[['item_id_str', 'enemy']], on='item_id_str', how='left')
+            df.drop(columns=['item_id_str'], inplace=True)
+            df = df.where(pd.notnull(df), None)
+        except Exception:
+            pass
 
     emb_list = []
     for v in df.get('embedding', []):
@@ -206,7 +218,7 @@ def vector_search(query_embedding: List[float], top_k: int = 5, search_method: s
                 rows.append((row.get('item_id'), row.get('domain'), row.get('topic'), row.get('stem'),
                              row.get('choice_A'), row.get('choice_B'), row.get('choice_C'), row.get('choice_D'),
                              row.get('key'), row.get('rationale'), row.get('rasch_b'), row.get('pvalue'),
-                             row.get('point_biserial'), score))
+                             row.get('point_biserial'), row.get('enemy'), score))
             return pd.DataFrame(rows, columns=RESULT_COLUMNS)
 
         elif search_method == 'hybrid_weighted':
@@ -226,7 +238,7 @@ def vector_search(query_embedding: List[float], top_k: int = 5, search_method: s
                 rows.append((row.get('item_id'), row.get('domain'), row.get('topic'), row.get('stem'),
                              row.get('choice_A'), row.get('choice_B'), row.get('choice_C'), row.get('choice_D'),
                              row.get('key'), row.get('rationale'), row.get('rasch_b'), row.get('pvalue'),
-                             row.get('point_biserial'), float(combined[i])))
+                             row.get('point_biserial'), row.get('enemy'), float(combined[i])))
             return pd.DataFrame(rows, columns=RESULT_COLUMNS)
 
         elif search_method == 'rrf':
@@ -252,7 +264,7 @@ def vector_search(query_embedding: List[float], top_k: int = 5, search_method: s
                 rows.append((row.get('item_id'), row.get('domain'), row.get('topic'), row.get('stem'),
                              row.get('choice_A'), row.get('choice_B'), row.get('choice_C'), row.get('choice_D'),
                              row.get('key'), row.get('rationale'), row.get('rasch_b'), row.get('pvalue'),
-                             row.get('point_biserial'), float(rrf_scores[i])))
+                             row.get('point_biserial'), row.get('enemy'), float(rrf_scores[i])))
             return pd.DataFrame(rows, columns=RESULT_COLUMNS)
 
         else:
@@ -288,6 +300,7 @@ def vector_search(query_embedding: List[float], top_k: int = 5, search_method: s
                     rasch_b,
                     pvalue,
                     point_biserial,
+                    enemy,
                     1 - (embedding <=> %s::vector) AS similarity_score
                 FROM itembank
                 WHERE embedding IS NOT NULL
@@ -301,7 +314,7 @@ def vector_search(query_embedding: List[float], top_k: int = 5, search_method: s
                 'item_id', 'domain', 'topic', 'stem', 
                 'choice_A', 'choice_B', 'choice_C', 'choice_D', 
                 'key', 'rationale', 'rasch_b', 'pvalue', 
-                'point_biserial', 'similarity_score'
+                'point_biserial', 'enemy', 'similarity_score'
             ]
             
         elif search_method == "hybrid_weighted":
@@ -345,6 +358,7 @@ def vector_search(query_embedding: List[float], top_k: int = 5, search_method: s
                     i.rasch_b,
                     i.pvalue,
                     i.point_biserial,
+                    i.enemy,
                     (COALESCE(k.keyword_score, 0) * %s + 
                      COALESCE(s.semantic_score, 0) * %s) AS similarity_score
                 FROM itembank i
@@ -362,7 +376,7 @@ def vector_search(query_embedding: List[float], top_k: int = 5, search_method: s
                 'item_id', 'domain', 'topic', 'stem', 
                 'choice_A', 'choice_B', 'choice_C', 'choice_D', 
                 'key', 'rationale', 'rasch_b', 'pvalue', 
-                'point_biserial', 'similarity_score'
+                'point_biserial', 'enemy', 'similarity_score'
             ]
             
         elif search_method == "rrf":
@@ -402,6 +416,7 @@ def vector_search(query_embedding: List[float], top_k: int = 5, search_method: s
                     i.rasch_b,
                     i.pvalue,
                     i.point_biserial,
+                    i.enemy,
                     (1.0 / (%s + COALESCE(k.keyword_rank, 1000))) +
                     (1.0 / (%s + COALESCE(s.semantic_rank, 1000))) AS similarity_score
                 FROM itembank i
@@ -419,7 +434,7 @@ def vector_search(query_embedding: List[float], top_k: int = 5, search_method: s
                 'item_id', 'domain', 'topic', 'stem', 
                 'choice_A', 'choice_B', 'choice_C', 'choice_D', 
                 'key', 'rationale', 'rasch_b', 'pvalue', 
-                'point_biserial', 'similarity_score'
+                'point_biserial', 'enemy', 'similarity_score'
             ]
         
         else:
@@ -834,6 +849,22 @@ def main():
                             st.warning(f"⚠️ No items found with current filter settings (similarity ≥ {top_p:.2f})")
                             st.stop()
 
+                # Display similar items details table
+                st.markdown("**Similar Items Details**")
+                detail_cols = ['item_id', 'domain', 'rasch_b', 'enemy', 'similarity_score']
+                cols_to_show = [c for c in detail_cols if c in results_df.columns]
+                display_results = results_df[cols_to_show].copy()
+                rename_dict = {
+                    'item_id': 'Item ID',
+                    'domain': 'Domain',
+                    'rasch_b': 'Rasch B',
+                    'enemy': 'Enemy Items',
+                    'similarity_score': 'Similarity Score'
+                }
+                display_results.rename(columns=rename_dict, errors='ignore', inplace=True)
+                display_results.index = range(1, len(display_results) + 1)
+                st.dataframe(display_results, use_container_width=True)
+
                 if len(results_df) > 1:
                     st.markdown("**Select Item to View:**")
                     selected_idx = st.selectbox(
@@ -985,8 +1016,9 @@ def main():
                 st.metric("Average Rasch Difficulty", f"{rasch_mean:.4f}")
                 st.metric("Rasch Difficulty SD", f"{rasch_sd:.4f}")
                 st.markdown(f"**Items considered:** {len(filtered)}")
-                stats_df = filtered[[ 'item_id', 'domain', 'rasch_b', 'similarity_score' ]]
-                st.dataframe(stats_df.reset_index(drop=True), use_container_width=True)
+                stats_df = filtered[[ 'item_id', 'domain', 'rasch_b', 'similarity_score' ]].copy()
+                stats_df.index = range(1, len(stats_df) + 1)
+                st.dataframe(stats_df, use_container_width=True)
                 st.markdown("---")
                 st.markdown("**Select Item to View:**")
                 sel_idx = st.selectbox(
@@ -1092,8 +1124,7 @@ def main():
                     .groupby('domain', as_index=False)
                     .agg(
                         count=('domain', 'size'),
-                        mean_similarity_score=('similarity_score', 'mean'),
-                        max_similarity_score=('similarity_score', 'max')
+                        mean_similarity_score=('similarity_score', 'mean')
                     )
                     .sort_values(
                         ['count', 'mean_similarity_score'],
@@ -1101,10 +1132,27 @@ def main():
                     )
                     .reset_index(drop=True)
                 )
+                domain_counts.index = range(1, len(domain_counts) + 1)
                 predicted_domain = domain_counts.iloc[0]['domain']
                 st.metric("Predicted Domain", predicted_domain)
                 st.markdown("**Domain Summary for Similar Items**")
                 st.dataframe(domain_counts, use_container_width=True)
+
+                st.markdown("**Similar Items Details**")
+                detail_cols = ['item_id', 'domain', 'rasch_b', 'enemy', 'similarity_score']
+                cols_to_show = [c for c in detail_cols if c in filtered.columns]
+                display_filtered = filtered[cols_to_show].copy()
+                rename_dict = {
+                    'item_id': 'Item ID',
+                    'domain': 'Domain',
+                    'rasch_b': 'Rasch B',
+                    'enemy': 'Enemy Items',
+                    'similarity_score': 'Similarity Score'
+                }
+                display_filtered.rename(columns=rename_dict, errors='ignore', inplace=True)
+                display_filtered.index = range(1, len(display_filtered) + 1)
+                st.dataframe(display_filtered, use_container_width=True)
+
                 st.markdown("---")
                 st.markdown("**Select Item to View:**")
                 sel_idx = st.selectbox(
