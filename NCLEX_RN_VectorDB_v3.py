@@ -27,6 +27,7 @@ CSV_PATH = "item_bank_hosted.csv"
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
+SIMILARITY_EPSILON = 1e-12
 RESULT_COLUMNS = [
     'item_id', 'domain', 'topic', 'stem',
     'choice_A', 'choice_B', 'choice_C', 'choice_D',
@@ -114,6 +115,24 @@ def csv_status():
         return None, str(e)
 
 
+def apply_result_filter(results_df: pd.DataFrame, filtering_mode: str, top_k: int, top_p: float) -> pd.DataFrame:
+    """Apply the selected Top-K / Top-P filter to a search result frame."""
+    if results_df.empty:
+        return results_df
+
+    filtered = results_df.copy()
+    min_similarity = top_p - SIMILARITY_EPSILON
+    if filtering_mode == "Top P only":
+        filtered = filtered[filtered['similarity_score'] >= min_similarity]
+    elif filtering_mode == "Both Top K and Top P":
+        filtered = filtered.head(top_k)
+        filtered = filtered[filtered['similarity_score'] >= min_similarity]
+    elif filtering_mode == "Top K only":
+        filtered = filtered.head(top_k)
+
+    return filtered.reset_index(drop=True)
+
+
 @st.cache_resource
 def load_embedding_model():
     """Load the sentence transformer model (cached)"""
@@ -160,7 +179,7 @@ def vector_search(query_embedding: List[float], top_k: int = 5, search_method: s
         else:
             qn = q / q_norm
 
-        sims = emb_normed.dot(qn)
+        sims = np.clip(emb_normed.dot(qn), -1.0, 1.0)
 
         # Prepare keyword score if needed (simple token count)
         if search_method in ["hybrid_weighted", "rrf"]:
@@ -774,11 +793,7 @@ def main():
                         )
                         original_results = results_df.copy()
                         if not results_df.empty:
-                            if filtering_mode == "Top P only":
-                                results_df = results_df[results_df['similarity_score'] >= top_p]
-                            elif filtering_mode == "Both Top K and Top P":
-                                results_df = results_df.head(top_k)
-                                results_df = results_df[results_df['similarity_score'] >= top_p]
+                            results_df = apply_result_filter(results_df, filtering_mode, top_k, top_p)
                         if not results_df.empty:
                             st.success(f"✅ Found {len(results_df)} similar items")
                             st.session_state['original_results'] = original_results
@@ -805,14 +820,12 @@ def main():
                     stored_top_k != top_k or 
                     stored_top_p != top_p):
                     if 'original_results' in st.session_state:
-                        results_df = st.session_state['original_results'].copy()
-                        if filtering_mode == "Top P only":
-                            results_df = results_df[results_df['similarity_score'] >= top_p]
-                        elif filtering_mode == "Both Top K and Top P":
-                            results_df = results_df.head(top_k)
-                            results_df = results_df[results_df['similarity_score'] >= top_p]
-                        elif filtering_mode == "Top K only":
-                            results_df = results_df.head(top_k)
+                        results_df = apply_result_filter(
+                            st.session_state['original_results'],
+                            filtering_mode,
+                            top_k,
+                            top_p
+                        )
                         st.session_state['search_results'] = results_df
                         st.session_state['filtering_mode'] = filtering_mode
                         st.session_state['top_k'] = top_k
@@ -957,12 +970,7 @@ def main():
                         search_keywords = keywords if keywords and keywords.strip() else d_query_text
                         search_top_k = len(load_csv_data(CSV_PATH)[0]) if USE_CSV and filtering_mode == "Top P only" else top_k
                         results_df = vector_search(q_emb, search_top_k, search_method=search_method_key, keywords=search_keywords, semantic_weight=semantic_weight, keyword_weight=keyword_weight)
-                        filtered = results_df
-                        if filtering_mode == "Top P only":
-                            filtered = results_df[results_df['similarity_score'] >= top_p]
-                        elif filtering_mode == "Both Top K and Top P":
-                            filtered = results_df.head(top_k)
-                            filtered = filtered[filtered['similarity_score'] >= top_p]
+                        filtered = apply_result_filter(results_df, filtering_mode, top_k, top_p)
                         if filtered.empty:
                             st.warning("⚠️ No similar items found to compute difficulty statistics")
                         else:
@@ -1044,23 +1052,55 @@ def main():
                             semantic_weight=semantic_weight,
                             keyword_weight=keyword_weight
                         )
-                        filtered = results_df
-                        if filtering_mode == "Top P only":
-                            filtered = results_df[results_df['similarity_score'] >= top_p]
-                        elif filtering_mode == "Both Top K and Top P":
-                            filtered = results_df.head(top_k)
-                            filtered = filtered[filtered['similarity_score'] >= top_p]
+                        filtered = apply_result_filter(results_df, filtering_mode, top_k, top_p)
+                        st.session_state['classification_original_results'] = results_df.copy()
+                        st.session_state['classification_filtering_mode'] = filtering_mode
+                        st.session_state['classification_top_k'] = top_k
+                        st.session_state['classification_top_p'] = top_p
                         if filtered.empty:
+                            st.session_state['classification_results'] = pd.DataFrame()
                             st.warning("⚠️ No similar items found to compute classification")
                         else:
-                            filtered = filtered.reset_index(drop=True)
                             st.session_state['classification_results'] = filtered
+
+        if 'classification_original_results' in st.session_state:
+            stored_class_mode = st.session_state.get('classification_filtering_mode', filtering_mode)
+            stored_class_top_k = st.session_state.get('classification_top_k', top_k)
+            stored_class_top_p = st.session_state.get('classification_top_p', top_p)
+
+            if (
+                stored_class_mode != filtering_mode or
+                stored_class_top_k != top_k or
+                stored_class_top_p != top_p
+            ):
+                filtered = apply_result_filter(
+                    st.session_state['classification_original_results'],
+                    filtering_mode,
+                    top_k,
+                    top_p
+                )
+                st.session_state['classification_results'] = filtered
+                st.session_state['classification_filtering_mode'] = filtering_mode
+                st.session_state['classification_top_k'] = top_k
+                st.session_state['classification_top_p'] = top_p
 
         if 'classification_results' in st.session_state and not st.session_state['classification_results'].empty:
             filtered = st.session_state['classification_results']
             with c_output.container():
-                domain_counts = filtered['domain'].value_counts().reset_index()
-                domain_counts.columns = ['domain', 'count']
+                domain_counts = (
+                    filtered
+                    .groupby('domain', as_index=False)
+                    .agg(
+                        count=('domain', 'size'),
+                        mean_similarity_score=('similarity_score', 'mean'),
+                        max_similarity_score=('similarity_score', 'max')
+                    )
+                    .sort_values(
+                        ['count', 'mean_similarity_score'],
+                        ascending=[False, False]
+                    )
+                    .reset_index(drop=True)
+                )
                 predicted_domain = domain_counts.iloc[0]['domain']
                 st.metric("Predicted Domain", predicted_domain)
                 st.markdown("**Domain Summary for Similar Items**")
@@ -1075,6 +1115,9 @@ def main():
                 )
                 sel_row = filtered.iloc[sel_idx]
                 render_item_preview((sel_row['item_id'], sel_row['domain'], sel_row['topic'], sel_row['stem'], sel_row['choice_A'], sel_row['choice_B'], sel_row['choice_C'], sel_row['choice_D'], sel_row['key'], sel_row['rationale'], sel_row['rasch_b'], sel_row['pvalue'], sel_row['point_biserial']))
+        elif 'classification_original_results' in st.session_state:
+            with c_output.container():
+                st.warning(f"⚠️ No similar items found with current filter settings (similarity ≥ {top_p:.2f})")
 
 if __name__ == "__main__":
     main()
