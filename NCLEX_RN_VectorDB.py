@@ -15,7 +15,7 @@ import numpy as np
 DB_CONFIG = {
     "dbname": "pgvector",
     "user": "postgres",
-    "password": "pgvector",
+    "password": "007000",
     "host": "localhost",
     "port": 5432
 }
@@ -542,8 +542,7 @@ def main():
         search_clicked = st.button("🔍 Search Similar Items", type="primary")
     
     # Create placeholder for output in col2
-    with col2:
-        output_placeholder = st.empty()
+    output_placeholder = col2.empty()
     
     # Handle search in col1 but display results in col2 placeholder
     if search_clicked:
