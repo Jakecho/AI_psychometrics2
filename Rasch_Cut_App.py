@@ -69,10 +69,30 @@ Item_9,Polytomous,0.2,-0.8;0.8,0,"PCM Item 9 (RSM relative thresholds)"
 Item_10,Polytomous,,0.0;1.0;2.0,0,"PCM Item 10 (4 categories: 0, 1, 2, 3)"
 """
 
+import re
+
+def _detect_base_from_label(label_str):
+    """
+    Auto-detect the minimum category score from an item label.
+    Looks for patterns like '(2,3,4)' or '(0,1,2,3)' and returns the smallest
+    category value found.  Returns 0 when no pattern is matched.
+    """
+    # Match (x,y,...,z) patterns — comma-separated integers inside parentheses
+    m = re.search(r'\((\d+(?:\s*,\s*\d+)+)\)', label_str)
+    if m:
+        cats = [int(c.strip()) for c in m.group(1).split(",")]
+        return min(cats)
+    return 0
+
 def parse_uploaded_csv(df):
     """
     Parses items from uploaded pandas DataFrame.
     Returns (items_list, min_scores) where min_scores is a list of per-item base scores.
+
+    Base score detection priority:
+      1. Explicit 'Min_Score' column in the CSV (highest priority).
+      2. Auto-detection from 'Label' column patterns like '(2,3,4)'.
+      3. Default to 0.
     """
     items_list = []
     min_scores = []
@@ -80,7 +100,9 @@ def parse_uploaded_csv(df):
     # Required columns checks
     if "Item_ID" not in df.columns or "Item_Type" not in df.columns:
         raise ValueError("CSV file must contain at least 'Item_ID' and 'Item_Type' columns.")
-        
+
+    has_min_score_col = "Min_Score" in df.columns
+
     for _, row in df.iterrows():
         item_id = str(row["Item_ID"])
         item_type = str(row["Item_Type"]).strip().lower()
@@ -93,12 +115,13 @@ def parse_uploaded_csv(df):
         if "Step_Difficulties" in df.columns and pd.notna(row["Step_Difficulties"]):
             steps = [float(x) for x in str(row["Step_Difficulties"]).split(";") if x.strip()]
 
-        # Min_Score / base score (default = 0, matches Winsteps without RESCORE)
-        min_score = 0
-        if "Min_Score" in df.columns and pd.notna(row["Min_Score"]):
-            min_score = int(float(row["Min_Score"]))
-            
         label = str(row["Label"]) if "Label" in df.columns and pd.notna(row["Label"]) else item_id
+
+        # Min_Score detection: explicit column > label auto-detect > 0
+        if has_min_score_col and pd.notna(row["Min_Score"]):
+            min_score = int(float(row["Min_Score"]))
+        else:
+            min_score = _detect_base_from_label(label)
         
         item_dict = {"label": label}
         if item_type in ["dichotomous", "dich", "0/1"]:
