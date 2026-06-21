@@ -52,24 +52,30 @@ DEFAULT_ITEMS = [
 ]
 
 # Generate template CSV contents
-template_csv = """Item_ID,Item_Type,Difficulty,Step_Difficulties,Label
-Item_1,Dichotomous,-1.2,,"Dichotomous Item 1"
-Item_2,Dichotomous,-0.5,,"Dichotomous Item 2"
-Item_3,Dichotomous,0.0,,"Dichotomous Item 3"
-Item_4,Dichotomous,0.5,,"Dichotomous Item 4"
-Item_5,Dichotomous,1.0,,"Dichotomous Item 5"
-Item_6,Dichotomous,1.8,,"Dichotomous Item 6"
-Item_7,Polytomous,,-1.0;0.5,"PCM Item 7 (3 categories: 0, 1, 2)"
-Item_8,Polytomous,,-0.5;0.2;1.2,"PCM Item 8 (4 categories: 0, 1, 2, 3)"
-Item_9,Polytomous,0.2,-0.8;0.8,"PCM Item 9 (RSM relative thresholds)"
-Item_10,Polytomous,,0.0;1.0;2.0,"PCM Item 10 (4 categories: 0, 1, 2, 3)"
+# Min_Score: the lowest possible score a respondent can earn on an item.
+# When Min_Score > 0 (non-zero base), use the 'Keep Base Score' option to match
+# Winsteps behaviour (no RESCORE command). Use 'Recode to Zero' to shift all
+# item scores so the minimum is 0 (equivalent to Winsteps RESCORE=0).
+template_csv = """Item_ID,Item_Type,Difficulty,Step_Difficulties,Min_Score,Label
+Item_1,Dichotomous,-1.2,,0,"Dichotomous Item 1"
+Item_2,Dichotomous,-0.5,,0,"Dichotomous Item 2"
+Item_3,Dichotomous,0.0,,0,"Dichotomous Item 3"
+Item_4,Dichotomous,0.5,,0,"Dichotomous Item 4"
+Item_5,Dichotomous,1.0,,0,"Dichotomous Item 5"
+Item_6,Dichotomous,1.8,,0,"Dichotomous Item 6"
+Item_7,Polytomous,,-1.0;0.5,0,"PCM Item 7 (3 categories: 0, 1, 2)"
+Item_8,Polytomous,,-0.5;0.2;1.2,0,"PCM Item 8 (4 categories: 0, 1, 2, 3)"
+Item_9,Polytomous,0.2,-0.8;0.8,0,"PCM Item 9 (RSM relative thresholds)"
+Item_10,Polytomous,,0.0;1.0;2.0,0,"PCM Item 10 (4 categories: 0, 1, 2, 3)"
 """
 
 def parse_uploaded_csv(df):
     """
     Parses items from uploaded pandas DataFrame.
+    Returns (items_list, min_scores) where min_scores is a list of per-item base scores.
     """
     items_list = []
+    min_scores = []
     
     # Required columns checks
     if "Item_ID" not in df.columns or "Item_Type" not in df.columns:
@@ -86,6 +92,11 @@ def parse_uploaded_csv(df):
         steps = None
         if "Step_Difficulties" in df.columns and pd.notna(row["Step_Difficulties"]):
             steps = [float(x) for x in str(row["Step_Difficulties"]).split(";") if x.strip()]
+
+        # Min_Score / base score (default = 0, matches Winsteps without RESCORE)
+        min_score = 0
+        if "Min_Score" in df.columns and pd.notna(row["Min_Score"]):
+            min_score = int(float(row["Min_Score"]))
             
         label = str(row["Label"]) if "Label" in df.columns and pd.notna(row["Label"]) else item_id
         
@@ -102,8 +113,9 @@ def parse_uploaded_csv(df):
                 item_dict["difficulty"] = difficulty
                 
         items_list.append(item_dict)
+        min_scores.append(min_score)
         
-    return items_list
+    return items_list, min_scores
 
 # Sidebar header & file uploader
 st.sidebar.title("🎯 Control Panel")
@@ -119,23 +131,52 @@ st.sidebar.download_button(
     mime="text/csv"
 )
 
+# ── Base-score handling (Winsteps compatibility) ──────────────────────────────
+st.sidebar.markdown("### Base Score Handling")
+base_score_mode = st.sidebar.radio(
+    "Minimum Category Score",
+    options=["Keep Base Score (Winsteps default)", "Recode to Zero"],
+    index=0,
+    help=(
+        "**Keep Base Score**: Raw scores include each item's minimum category value "
+        "(e.g. if an item is scored 1–4, its contribution to the test total starts at 1). "
+        "This matches Winsteps output when no RESCORE command is used.\n\n"
+        "**Recode to Zero**: Shift every item so its minimum category = 0 before "
+        "computing the TCC (equivalent to Winsteps RESCORE=0)."
+    )
+)
+keep_base = (base_score_mode == "Keep Base Score (Winsteps default)")
+
 # Parse parameters
 items_to_use = DEFAULT_ITEMS
+min_scores_list = [0] * len(DEFAULT_ITEMS)   # default: all items start at 0
 is_uploaded = False
 
 if uploaded_file is not None:
     try:
         df_uploaded = pd.read_csv(uploaded_file)
-        items_to_use = parse_uploaded_csv(df_uploaded)
+        items_to_use, min_scores_list = parse_uploaded_csv(df_uploaded)
         is_uploaded = True
         st.sidebar.success("Item parameters file uploaded successfully!")
     except Exception as e:
         st.sidebar.error(f"Error parsing CSV: {str(e)}")
         st.sidebar.warning("Using default symmetric items instead.")
+        min_scores_list = [0] * len(DEFAULT_ITEMS)
 
-# Parse the items
+# Parse the items (step difficulties are always 0-based in the PCM engine)
 parsed_items = rmic.parse_items(items_to_use)
-max_score = sum(len(steps) for steps in parsed_items)
+
+# Per-item maximum score (number of steps above the base category)
+item_max_steps = [len(steps) for steps in parsed_items]   # PCM engine max per item
+
+# Total max score depends on base-score mode:
+#   Keep Base Score → max = sum(min_score_i + steps_i)
+#   Recode to Zero  → max = sum(steps_i)  [current behaviour]
+total_base_offset = sum(min_scores_list)   # 0 when all min_scores are 0
+if keep_base:
+    max_score = sum(ms + ns for ms, ns in zip(min_scores_list, item_max_steps))
+else:
+    max_score = sum(item_max_steps)  # recode: ignore base offsets
 
 # Add inputs in sidebar based on loaded test structure
 st.sidebar.markdown("### Test Parameters")
@@ -155,6 +196,17 @@ extrscore = st.sidebar.slider(
     step=0.05,
     help="Adjustment applied to 0 and maximum possible raw scores to enable finite logit estimates."
 )
+
+# ── Helper: convert a raw cut score to the 0-based score the PCM engine uses ─
+# When keeping base scores, subtract the total minimum offset before estimation.
+def effective_cut(raw, keep_base, total_base_offset, item_max_steps):
+    """Return the 0-based score for Newton-Raphson estimation."""
+    if keep_base:
+        return max(0.0, float(raw) - total_base_offset)
+    return float(raw)
+
+# Effective 0-based max for the PCM engine (always sum of steps)
+pcm_max_score = sum(item_max_steps)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**About the Model:** Uses Andrich adjacent-category log-odds to construct the Master Partial Credit Model (PCM) Test Characteristic Curve, solving using the Newton-Raphson iteration solver.")
@@ -181,8 +233,24 @@ with col4:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
+# ── Show base-score info banner when non-zero offsets are present ─────────────
+if keep_base and total_base_offset > 0:
+    st.info(
+        f"📌 **Keep Base Score mode**: Total minimum score offset = **{total_base_offset}** "
+        f"(sum of all item Min_Score values). "
+        f"The PCM engine estimates on the 0-based scale "
+        f"(raw − {total_base_offset}), then reports the Winsteps-equivalent raw score."
+    )
+elif not keep_base and total_base_offset > 0:
+    st.warning(
+        f"⚠️ **Recode to Zero mode**: Item base scores are ignored. "
+        f"Max score = {max_score} (Winsteps max would be {max_score + total_base_offset})."
+    )
+
 # 2. Solver Result Panel
-res = rmic.raw_to_logit(raw_cut, parsed_items, extrscore=extrscore)
+# Convert the Winsteps raw cut to the 0-based score the PCM engine expects
+eff_raw_cut = effective_cut(raw_cut, keep_base, total_base_offset, item_max_steps)
+res = rmic.raw_to_logit(eff_raw_cut, parsed_items, extrscore=extrscore)
 logit_cut = res["logit"]
 se_cut = res["se"]
 
@@ -213,13 +281,19 @@ with res_col3:
     )
 
 if res["converged"]:
-    st.info(f"Newton-Raphson solver converged successfully in {res['iterations']} iterations. Target adjusted score: {res['adjusted_score']:.2f}")
+    eff_adj = res['adjusted_score'] + (total_base_offset if keep_base else 0)
+    st.info(
+        f"Newton-Raphson solver converged successfully in {res['iterations']} iterations. "
+        f"Effective 0-based adjusted score: {res['adjusted_score']:.2f}"
+        + (f" (Winsteps-equivalent: {eff_adj:.2f})" if keep_base and total_base_offset > 0 else "")
+    )
 else:
     st.warning("Newton-Raphson solver failed to converge. Review inputs.")
 
 # 3. Visualizations
 st.subheader("📈 Visualization of TCC & TIF Curves")
-fig = rmic.plot_tcc_and_tif(items_to_use, cut_score=raw_cut)
+# Pass the effective 0-based cut score to the plotting functions
+fig = rmic.plot_tcc_and_tif(items_to_use, cut_score=eff_raw_cut)
 st.pyplot(fig)
 
 # 4. Item Bank Table (data.table style)
@@ -230,11 +304,16 @@ item_table_rows = []
 for idx, steps in enumerate(parsed_items):
     label = items_to_use[idx].get("label", f"Item {idx+1}")
     item_type = "Dichotomous" if len(steps) == 1 else "Polytomous (PCM)"
+    ms = min_scores_list[idx] if idx < len(min_scores_list) else 0
+    eff_cats = len(steps) + 1            # number of score categories (0-based)
+    base_max = ms + len(steps)           # max score in original (Winsteps) scale
     item_table_rows.append({
         "Item Number": idx + 1,
         "Item Label": label,
         "Item Type": item_type,
-        "Categories (Max)": len(steps) + 1,
+        "Min Score": ms,
+        "Max Score (Original)": base_max,
+        "Categories": eff_cats,
         "Absolute Step Difficulties (δ_ij)": ", ".join(["{:.3f}".format(s) for s in steps])
     })
 df_item_table = pd.DataFrame(item_table_rows)
@@ -244,10 +323,37 @@ st.dataframe(df_item_table, use_container_width=True)
 
 # 5. Conversion Table
 st.subheader("📊 Raw-to-Logit Scoring Table")
-st.markdown("The complete scoring table for all possible raw scores on this test form.")
+if keep_base and total_base_offset > 0:
+    st.markdown(
+        "The complete scoring table for all possible raw scores on this test form. "
+        f"**Raw Score (X)** shows the Winsteps-equivalent score "
+        f"(includes base offset of {total_base_offset}). "
+        "The PCM engine estimates on the 0-based scale internally."
+    )
+else:
+    st.markdown("The complete scoring table for all possible raw scores on this test form.")
 
-conversion_df = rmic.generate_conversion_table(items_to_use, extrscore=extrscore)
-conversion_df.columns = ["Raw Score (X)", "Adjusted Score (X_adj)", "Ability Measure (θ)", "Model SE", "Converged", "Iterations"]
+# Generate the 0-based conversion table (PCM engine)
+conversion_df_raw = rmic.generate_conversion_table(items_to_use, extrscore=extrscore)
+
+if keep_base and total_base_offset > 0:
+    # Add the base offset back to the displayed raw scores so they match Winsteps
+    conversion_df = conversion_df_raw.copy()
+    conversion_df["Raw Score (X)"] = conversion_df_raw["Raw Score"] + total_base_offset
+    conversion_df["Adjusted Score (X_adj)"] = conversion_df_raw["Adjusted Score"] + total_base_offset
+    conversion_df["Ability Measure (θ)"] = conversion_df_raw["Logit Measure"]
+    conversion_df["Model SE"] = conversion_df_raw["Model SE"]
+    conversion_df["Converged"] = conversion_df_raw["Converged"]
+    conversion_df["Iterations"] = conversion_df_raw["Iterations"]
+    conversion_df = conversion_df[["Raw Score (X)", "Adjusted Score (X_adj)",
+                                   "Ability Measure (θ)", "Model SE",
+                                   "Converged", "Iterations"]]
+else:
+    conversion_df = conversion_df_raw.rename(columns={
+        "Raw Score": "Raw Score (X)",
+        "Adjusted Score": "Adjusted Score (X_adj)",
+        "Logit Measure": "Ability Measure (θ)"
+    })
 
 st.dataframe(conversion_df, use_container_width=True)
 
