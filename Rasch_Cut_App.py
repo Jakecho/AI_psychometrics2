@@ -146,13 +146,30 @@ st.sidebar.markdown("---")
 
 uploaded_file = st.sidebar.file_uploader("Upload Item Parameters CSV", type=["csv"])
 
-# Download sample template button
-st.sidebar.download_button(
-    label="Download Template CSV",
-    data=template_csv,
-    file_name="rasch_items_template.csv",
-    mime="text/csv"
-)
+# Download buttons
+dl_col1, dl_col2 = st.sidebar.columns(2)
+with dl_col1:
+    st.download_button(
+        label="📄 Template CSV",
+        data=template_csv,
+        file_name="rasch_items_template.csv",
+        mime="text/csv",
+        help="Blank template for entering your own item parameters."
+    )
+with dl_col2:
+    # Load Winsteps example CSV if it exists, otherwise skip
+    import os
+    _ws_example_path = "/Users/jakecho/Downloads/findingtheta/rasch_mixed_items_template.csv"
+    if os.path.exists(_ws_example_path):
+        with open(_ws_example_path, "rb") as _f:
+            _ws_example_bytes = _f.read()
+        st.download_button(
+            label="📊 Winsteps Example",
+            data=_ws_example_bytes,
+            file_name="winsteps_mixed_items_example.csv",
+            mime="text/csv",
+            help="115-item example with non-zero base categories (2,3,4). Use with 'Keep Base Score' to match Winsteps output."
+        )
 
 # ── Base-score handling (Winsteps compatibility) ──────────────────────────────
 st.sidebar.markdown("### Base Score Handling")
@@ -256,18 +273,49 @@ with col4:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── Show base-score info banner when non-zero offsets are present ─────────────
-if keep_base and total_base_offset > 0:
-    st.info(
-        f"📌 **Keep Base Score mode**: Total minimum score offset = **{total_base_offset}** "
-        f"(sum of all item Min_Score values). "
-        f"The PCM engine estimates on the 0-based scale "
-        f"(raw − {total_base_offset}), then reports the Winsteps-equivalent raw score."
+# ── Always show Keep vs Recode comparison ─────────────────────────────────────
+pcm_max_only = sum(item_max_steps)   # 0-based max (Recode mode)
+ws_max_equiv = pcm_max_only + total_base_offset  # Winsteps-equivalent max (Keep mode)
+
+mode_col1, mode_col2 = st.columns(2)
+with mode_col1:
+    border_keep = "2px solid #1f77b4" if keep_base else "1px solid #dee2e6"
+    bg_keep = "#e8f4fd" if keep_base else "#f8f9fa"
+    st.markdown(
+        f"""<div style='border:{border_keep};border-radius:8px;padding:12px;background:{bg_keep};'>
+        <b>{'✅ ' if keep_base else ''}Keep Base Score</b> (Winsteps default)<br>
+        <small>Score range: <b>{total_base_offset} → {ws_max_equiv}</b><br>
+        Min offset: <b>{total_base_offset}</b></small>
+        </div>""",
+        unsafe_allow_html=True
     )
-elif not keep_base and total_base_offset > 0:
+with mode_col2:
+    border_rec = "2px solid #ff7f0e" if not keep_base else "1px solid #dee2e6"
+    bg_rec = "#fff3e0" if not keep_base else "#f8f9fa"
+    st.markdown(
+        f"""<div style='border:{border_rec};border-radius:8px;padding:12px;background:{bg_rec};'>
+        <b>{'✅ ' if not keep_base else ''}Recode to Zero</b> (RESCORE=0)<br>
+        <small>Score range: <b>0 → {pcm_max_only}</b><br>
+        Min offset: <b>0 (ignored)</b></small>
+        </div>""",
+        unsafe_allow_html=True
+    )
+
+if total_base_offset == 0:
+    st.caption(
+        "ℹ️ Both modes produce the same result for this item set because all items "
+        "have Min Score = 0. Upload the **Winsteps Example CSV** (items scored 2,3,4) "
+        "to see a difference."
+    )
+elif keep_base:
+    st.info(
+        f"📌 **Keep Base Score**: Raw scores include each item's minimum category value. "
+        f"Score range **{total_base_offset}–{ws_max_equiv}** matches Winsteps SCOREFILE."
+    )
+else:
     st.warning(
-        f"⚠️ **Recode to Zero mode**: Item base scores are ignored. "
-        f"Max score = {max_score} (Winsteps max would be {max_score + total_base_offset})."
+        f"⚠️ **Recode to Zero**: Min scores ignored. Range **0–{pcm_max_only}** "
+        f"(Winsteps SCOREFILE shows {total_base_offset}–{ws_max_equiv})."
     )
 
 # 2. Solver Result Panel
