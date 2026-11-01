@@ -127,18 +127,14 @@ class ItemUsageTracker:
             item_id = str(row['item_id'])
             domain = str(row.get('domain', 'Unspecified'))
 
-            # Check global threshold
-            if self.usage_count.get(item_id, 0) >= self.global_max_usage:
-                continue
-
-            # Check domain threshold (if specified, otherwise fallback to global)
+            # Domain-specific limits override the default, including higher limits.
             domain_limit = self.domain_max_usage.get(domain, self.global_max_usage)
             if self.usage_count.get(item_id, 0) >= domain_limit:
                 continue
 
             eligible_items.append(row)
 
-        return pd.DataFrame(eligible_items)
+        return pd.DataFrame(eligible_items, columns=self.item_pool.columns)
 
     def get_exposure_stats(self) -> Dict[str, Any]:
         """Return exposure statistics for reporting."""

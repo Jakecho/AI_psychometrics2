@@ -30,6 +30,39 @@ Semantic search engine for finding similar NCLEX items using pgvector and senten
 
 ## 🚀 Quick Start
 
+### LOFT Sequential ATA (Google OR-Tools CP-SAT)
+
+`LOFT_squentialATA.py` assembles forms one at a time with a local CP-SAT
+backend in `loft_cpsat_solver.py`. No API key or database is required.
+
+```bash
+python -m pip install streamlit pandas numpy plotly openpyxl xlrd scipy 'ortools>=9.14,<10'
+python -m streamlit run LOFT_squentialATA.py
+```
+
+Upload a CSV, XLSX, or XLS bank containing `item_id`, `domain`, `rasch_b`,
+`pvalue`, and `point_biserial`. Optional columns are `raschb_cat`, `enemy_ids`,
+`has_image`, and `has_audio`. Item IDs must be unique; media flags must be 0/1.
+`testlet_id`, if present, is exported as metadata; testlet grouping is not enforced.
+
+The app enforces length, domain/category counts, automatic difficulty bins,
+media limits, enemies, common/excluded items, Rasch TIF/TCC and mean difficulty,
+exposure limits, and pairwise Jaccard overlap. Domain exposure limits override
+the default reuse limit. Common items count toward exposure and overlap.
+Changing the bank or settings starts a fresh assembly session.
+
+CP-SAT uses single-worker search and conservative integer scaling at 1e-7
+precision for psychometric constraints. Extremely tight or zero tolerances
+may be infeasible at that precision. `Feasible` means a valid solution was
+found within the time limit; `Optimal` also certifies the scaled objective's
+optimum for the current active pool. Failed attempts never relax overlap limits.
+Excel exports include an overview, solver status, and each form's bank rows.
+
+Run the focused regression checks with `python -m pytest test_loft_cpsat.py`.
+To include an external sample bank, set `LOFT_SAMPLE_BANK` to its CSV path.
+The external-bank checks use the seven-domain NCLEX bank with `3. easy` and
+`6. hard` categories. Tests also use `pytest`; the legacy XLS fixture uses `xlwt`.
+
 ### Prerequisites
 
 ```bash

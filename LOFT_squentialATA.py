@@ -1,8 +1,8 @@
 """
-LOFT_squentialATA — Sequential LOFT with CBC Solver
+LOFT_squentialATA — Sequential LOFT with OR-Tools CP-SAT
 ===================================================
 Linear-on-the-Fly Testing with sequential form assembly using
-CBC Solver (PuLP MIP optimization).
+Google OR-Tools CP-SAT optimization.
 
 Implements three LOFT optimization strategies from Cho (2025):
   1. Domain-specific exposure thresholds
@@ -21,7 +21,7 @@ Features:
 - Excel export
 
 Prerequisites:
-  pip install streamlit pandas plotly openpyxl scipy pulp
+  pip install streamlit pandas plotly openpyxl xlrd scipy ortools
 
 Author: AI Assistant
 Date: March 3, 2026
@@ -39,14 +39,17 @@ from loft_sequential_engine import (
     generate_active_pool,
     ItemUsageTracker,
 )
-# CBC_ATA import is deferred to avoid module-level st.set_page_config collision
 import plotly.graph_objects as go
 import io
+import hashlib
+import json
+
+from loft_cpsat_solver import assemble_forms_with_cpsat, validate_item_bank
 
 # ==================== Page Configuration ====================
 
 st.set_page_config(
-    page_title="LOFT Sequential ATA — CBC Solver",
+    page_title="LOFT Sequential ATA — OR-Tools CP-SAT",
     page_icon="🧬",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -64,10 +67,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🧬 LOFT Sequential ATA — CBC Solver")
+st.title("🧬 LOFT Sequential ATA — OR-Tools CP-SAT")
 st.markdown(
     "*A live Dashboard for sequential Linear-on-the-Fly Test assembly "
-    "using CBC Solver (PuLP MIP optimization). All processing runs locally.*"
+    "using Google OR-Tools CP-SAT optimization. All processing runs locally.*"
 )
 st.caption(
     "📚 Based on: Cho (2025). _Optimizing LOFT Test Assembly: "
@@ -107,26 +110,16 @@ if not uploaded_file:
 
     st.stop()
 
-# Load
-if uploaded_file.name.endswith('.csv'):
-    df = pd.read_csv(uploaded_file)
-elif uploaded_file.name.endswith(('.xlsx', '.xls')):
-    df = pd.read_excel(uploaded_file)
-else:
-    st.error("Unsupported file format.")
+# Load and validate before calculating statistics or constructing the solver.
+try:
+    if uploaded_file.name.lower().endswith('.csv'):
+        df = pd.read_csv(uploaded_file, dtype={'item_id': str})
+    else:
+        df = pd.read_excel(uploaded_file, dtype={'item_id': str})
+    df = validate_item_bank(df)
+except Exception as exc:
+    st.error(f"Unable to load item bank: {exc}")
     st.stop()
-
-# Validate required columns
-required_cols = ['item_id', 'domain', 'rasch_b', 'pvalue', 'point_biserial']
-missing_cols = [col for col in required_cols if col not in df.columns]
-if missing_cols:
-    st.error(f"Missing required columns: {missing_cols}")
-    st.stop()
-
-df['item_id'] = df['item_id'].astype(str)
-df['domain'] = df['domain'].fillna('Unspecified')
-if 'raschb_cat' in df.columns:
-    df['raschb_cat'] = df['raschb_cat'].fillna('Unspecified')
 
 st.sidebar.success(f"✅ Bank Loaded: {len(df)} items")
 
@@ -144,7 +137,7 @@ if has_domain:
 if has_enemies:
     features.append("Enemy Items")
 if has_testlets:
-    features.append("Testlets")
+    features.append("Testlet metadata (export only)")
 if has_image:
     features.append("Images")
 if has_audio:
@@ -184,8 +177,12 @@ st.divider()
 # ==================== 2. Engine ====================
 
 st.sidebar.header("🤖 2. Engine")
-st.sidebar.caption("⚡ CBC Solver — pure MIP optimization, no LLM required.")
+st.sidebar.caption("⚡ OR-Tools CP-SAT — constraint optimization, no LLM required.")
 st.sidebar.divider()
+
+with st.sidebar.expander("Solver Settings", expanded=False):
+    solver_seconds = st.number_input("Time Limit per Solve (seconds)", 1, 120, 10)
+    sampling_attempts = st.number_input("Maximum Sampling Attempts per Form", 1, 100, 10)
 
 # ==================== 3. Constraints ====================
 
@@ -198,7 +195,8 @@ with st.sidebar.expander("Form Specifications", expanded=True):
 
     c3, c4 = st.columns(2)
     multiplier = c3.number_input("Pool Multiplier", 2, 10, 5)
-    exposure_max = c4.number_input("Global Exposure Limit", 1, 1000, 2)
+    exposure_max = c4.number_input("Default Exposure Limit", 1, 1000, 2,
+        help="Per-item reuse limit. Domain-specific limits override this default.")
 
     max_overlap = st.slider("Max Jaccard Overlap", 0.0, 1.0, 0.3, 0.05)
     apply_enemies = st.checkbox(
@@ -239,15 +237,16 @@ with st.sidebar.expander("Targets & Tolerances", expanded=True):
     mean_tol = c8.number_input("Mean B Tol", 0.0, 3.0, 0.2, 0.1)
 
     c9, c10 = st.columns(2)
-    tif_tol_val = c9.number_input("TIF Tol (+)", 0.0, 10.0, 0.2, 0.1)
+    tif_tol_val = c9.number_input("TIF Tol (+/-)", 0.0, 10.0, 0.2, 0.1)
     tcc_tol_val = c10.number_input("TCC Tol (+/-)", 0.0, 5.0, 0.5, 0.1)
 
     tcc_target_val = st.number_input(
-        "TCC Target (Expected Score)", value=0.0, step=1.0,
+        "TCC Target (Expected Score)", min_value=0.0, value=0.0, step=1.0,
         help="0.0 = Disabled"
     )
 
 with st.sidebar.expander("Dynamic Domains", expanded=False):
+    st.caption("A maximum of 0 leaves the upper limit unrestricted.")
     domain_payload = {}
     if has_domain:
         domains_list = sorted(df['domain'].dropna().unique().tolist())
@@ -265,6 +264,7 @@ with st.sidebar.expander("Dynamic Domains", expanded=False):
         st.info("No 'domain' column found in bank.")
 
 with st.sidebar.expander("Media Constraints", expanded=False):
+    st.caption("A maximum of 0 leaves the upper limit unrestricted.")
     c_items = st.text_input("Common Item IDs (comma-separated)", "")
 
     st.markdown("**Excluded Items**")
@@ -273,13 +273,13 @@ with st.sidebar.expander("Media Constraints", expanded=False):
 
     st.markdown("**Images**")
     im1, im2 = st.columns(2)
-    img_min = im1.number_input("Min Image", 0, test_len, 0)
-    img_max = im2.number_input("Max Image", 0, test_len, 0)
+    img_min = im1.number_input("Min Image", 0, test_len, 0, disabled=not has_image)
+    img_max = im2.number_input("Max Image", 0, test_len, 0, disabled=not has_image)
 
     st.markdown("**Audio**")
     au1, au2 = st.columns(2)
-    audio_min = au1.number_input("Min Audio", 0, test_len, 0)
-    audio_max = au2.number_input("Max Audio", 0, test_len, 0)
+    audio_min = au1.number_input("Min Audio", 0, test_len, 0, disabled=not has_audio)
+    audio_max = au2.number_input("Max Audio", 0, test_len, 0, disabled=not has_audio)
 
 # ─── Strategy 3: Auto Difficulty Bins ───
 with st.sidebar.expander("📊 Difficulty Bins (Strategy 3)", expanded=False):
@@ -325,6 +325,7 @@ with st.sidebar.expander("📊 Difficulty Bins (Strategy 3)", expanded=False):
             st.info("No bins generated (check rasch_b column).")
 
 with st.sidebar.expander("Difficulty Buckets (raschb_cat)", expanded=False):
+    st.caption("A maximum of 0 leaves the upper limit unrestricted.")
     rasch_cats = {}
     if has_rasch_cat:
         cat_list = sorted(df['raschb_cat'].astype(str).unique().tolist())
@@ -370,22 +371,33 @@ if domain_payload:
 if tcc_target_val > 0.0:
     rules_payload['tcc_targets'] = [None, tcc_target_val, None]
     rules_payload['tcc_tolerances'] = [100.0, tcc_tol_val, 100.0]
-if tif_tol_val > 0.0:
-    rules_payload['tif_tolerances'] = [100.0, tif_tol_val, 100.0]
+rules_payload['tif_tolerances'] = [tif_tol_val] * 3
 if c_items:
     rules_payload['common_items'] = [x.strip() for x in c_items.split(',') if x.strip()]
 if excluded_str:
     rules_payload['excluded_items'] = [x.strip() for x in excluded_str.split(',') if x.strip()]
-if img_min > 0 or img_max > 0:
+if has_image and (img_min > 0 or img_max > 0):
     rules_payload['image_constraint'] = {
         'min': img_min, 'max': img_max if img_max > 0 else test_len
     }
-if audio_min > 0 or audio_max > 0:
+if has_audio and (audio_min > 0 or audio_max > 0):
     rules_payload['audio_constraint'] = {
         'min': audio_min, 'max': audio_max if audio_max > 0 else test_len
     }
 if rasch_cats:
     rules_payload['raschb_cat_constraints'] = rasch_cats
+
+# A different bank or different settings must start a new assembly session.
+settings_fingerprint = hashlib.sha256(
+    uploaded_file.getvalue() + json.dumps(
+        [rules_payload, tcc_tol_val, solver_seconds, sampling_attempts], sort_keys=True
+    ).encode()
+).hexdigest()
+if st.session_state.get('cpsat_settings') != settings_fingerprint:
+    for state_key in list(st.session_state):
+        if state_key.startswith('cpsat_'):
+            del st.session_state[state_key]
+    st.session_state['cpsat_settings'] = settings_fingerprint
 
 # ==================== Real-Time Dashboard ====================
 
@@ -526,13 +538,13 @@ if is_run_all or is_step or is_reset:
         return fig
 
 
-    # ── CBC Solver Path (sequential: sample → solve 1 form → track → repeat) ──
-    # Deferred import to avoid module-level Streamlit side effects in CBC_ATA.py
-    from CBC_ATA import assemble_forms_with_cbc
+    # ── OR-Tools CP-SAT Path (sequential: sample → solve 1 form → track → repeat) ──
 
-    # Build base config dict for CBC solver
-    cbc_config = {
+    # Build base config dict for CP-SAT solver
+    cpsat_config = {
         'test_length': test_len,
+        'time_limit': solver_seconds,
+        'difficulty_categories': auto_generate_difficulty_categories(df, test_len, n_categories=n_diff_bins) if auto_diff_bins else {},
         'approach': 'IRT (Rasch)',
         'domain_constraints': domain_payload,
         'raschb_cat_constraints': rasch_cats,
@@ -562,27 +574,39 @@ if is_run_all or is_step or is_reset:
     }
     # Optional constraints
     if c_items:
-        cbc_config['common_items'] = [x.strip() for x in c_items.split(',') if x.strip()]
+        cpsat_config['common_items'] = [x.strip() for x in c_items.split(',') if x.strip()]
     if excluded_str:
-        cbc_config['excluded_items'] = [x.strip() for x in excluded_str.split(',') if x.strip()]
-    if img_min > 0 or img_max > 0:
-        cbc_config['image_constraint'] = {
+        cpsat_config['excluded_items'] = [x.strip() for x in excluded_str.split(',') if x.strip()]
+    if has_image and (img_min > 0 or img_max > 0):
+        cpsat_config['image_constraint'] = {
             'min': img_min, 'max': img_max if img_max > 0 else test_len, 'enabled': True
         }
-    if audio_min > 0 or audio_max > 0:
-        cbc_config['audio_constraint'] = {
+    if has_audio and (audio_min > 0 or audio_max > 0):
+        cpsat_config['audio_constraint'] = {
             'min': audio_min, 'max': audio_max if audio_max > 0 else test_len, 'enabled': True
         }
 
     # ---- Helper: assemble ONE form and update state ----
-    def _cbc_assemble_one_form(tracker, all_forms, overview_rows, cumulative_used_ids,
-                               fig_tif, fig_tcc, x_vals, max_overlap, max_retries=100):
-        """Run one iteration of the CBC sequential loop. Returns True on success."""
+    def _cpsat_assemble_one_form(tracker, all_forms, overview_rows, cumulative_used_ids,
+                               fig_tif, fig_tcc, x_vals, max_overlap, max_retries=None):
+        """Run one iteration of the CP-SAT sequential loop. Returns True on success."""
+        max_retries = max_retries or sampling_attempts
         form_idx = len(all_forms)
         failed_attempts = 0
+        last_error = ''
+        common_ids = set(cpsat_config.get('common_items', []))
+        excluded_ids = set(cpsat_config.get('excluded_items', []))
+        known_ids = set(df['item_id'])
+        if common_ids - known_ids or common_ids & excluded_ids or len(common_ids) > test_len:
+            status_text.error("Invalid common items: check IDs, exclusions, and test length.")
+            return False
 
         while failed_attempts < max_retries:
             eligible_pool = tracker.get_eligible_pool()
+            eligible_pool = eligible_pool[~eligible_pool['item_id'].isin(excluded_ids)]
+            if not common_ids.issubset(set(eligible_pool['item_id'])):
+                status_text.error("A required common item has reached its exposure limit. Increase its domain/default limit or reduce the form count.")
+                return False
             if len(eligible_pool) < test_len:
                 status_text.error(
                     f"🛑 Eligible pool exhausted! {len(eligible_pool)} items remain, need {test_len}."
@@ -628,16 +652,21 @@ if is_run_all or is_step or is_reset:
             status_text.info(f"🔄 Form {form_idx+1}/{n_forms}: Sampling active pool ({len(active_pool)} items)...")
 
             try:
-                result = assemble_forms_with_cbc(active_pool, cbc_config, 1)
+                solve_config = dict(cpsat_config, previous_forms=all_forms, max_overlap=max_overlap)
+                result = assemble_forms_with_cpsat(active_pool, solve_config, 1)
             except Exception as e:
-                status_text.error(f"🛑 CBC Solver Error on Form {form_idx+1}: {e}")
+                status_text.error(f"🛑 OR-Tools CP-SAT Error on Form {form_idx+1}: {e}")
                 return False
 
-            cbc_status = result.get('status', 'Unknown')
-            if cbc_status != 'Optimal':
+            cpsat_status = result.get('status', 'Unknown')
+            if cpsat_status not in ('Optimal', 'Feasible'):
+                last_error = result.get('error_message', cpsat_status)
+                if cpsat_status == 'ModelInvalid':
+                    status_text.error(last_error)
+                    return False
                 failed_attempts += 1
                 status_text.warning(
-                    f"⚠️ Form {form_idx+1}: CBC status '{cbc_status}', retrying ({failed_attempts}/{max_retries})..."
+                    f"⚠️ Form {form_idx+1}: CP-SAT status '{cpsat_status}', retrying ({failed_attempts}/{max_retries})..."
                 )
                 continue
 
@@ -647,25 +676,10 @@ if is_run_all or is_step or is_reset:
                 failed_attempts += 1
                 continue
 
-            # Jaccard overlap check
-            new_set = set(str(x) for x in form_ids)
-            overlap_rejected = False
-            for past_form in all_forms:
-                past_set = set(str(x) for x in past_form['selected_items'])
-                intersection = len(new_set & past_set)
-                union = len(new_set | past_set)
-                jaccard = intersection / union if union > 0 else 0
-                if jaccard > max_overlap:
-                    overlap_rejected = True
-                    break
-
-            if overlap_rejected:
-                failed_attempts += 1
-                if failed_attempts >= max_retries:
-                    status_text.warning(f"⚠️ Form {form_idx+1}: accepting despite overlap (retries exhausted).")
-                else:
-                    status_text.warning(f"⚠️ Form {form_idx+1}: high overlap, retrying ({failed_attempts}/{max_retries})...")
-                    continue
+            # Overlap is enforced inside CP-SAT, including the final attempt.
+            if len(form_ids) != test_len or len(set(form_ids)) != test_len:
+                status_text.error("Solver returned an invalid form length; no usage was recorded.")
+                return False
 
             # Record usage
             str_ids = [str(x) for x in form_ids]
@@ -679,6 +693,7 @@ if is_run_all or is_step or is_reset:
             primary_tcc = calculate_tcc(theta_target, b_array) if len(b_array) > 0 else 0
             form_dict = {
                 'selected_items': form_ids,
+                'solver_status': cpsat_status,
                 'metrics': {
                     'mean_b': float(subset['rasch_b'].mean()) if len(subset) > 0 else 0,
                     'sd_b': float(subset['rasch_b'].std()) if len(subset) > 0 else 0,
@@ -693,7 +708,7 @@ if is_run_all or is_step or is_reset:
             fi = len(all_forms)  # 1-indexed form number
 
             # Update dashboard
-            status_text.success(f"✅ Form {fi}/{n_forms} assembled!")
+            status_text.success(f"✅ Form {fi}/{n_forms} assembled! CP-SAT: {cpsat_status}.")
             live_progress.progress(min(fi / n_forms, 1.0))
             metric_forms.metric("Forms Built", f"{fi}/{n_forms}")
             exp_stats = tracker.get_exposure_stats()
@@ -701,7 +716,7 @@ if is_run_all or is_step or is_reset:
             metric_exposure.metric("Max Exposure", exp_stats['max_exposure'])
 
             overview_rows.append({
-                'Form': f'Form {fi}', 'N Items': len(form_ids),
+                'Form': f'Form {fi}', 'N Items': len(form_ids), 'Solver Status': cpsat_status,
                 'Mean B': round(m['mean_b'], 3), 'SD B': round(m['sd_b'], 3),
                 'TIF@θ': round(m['primary_tif'], 2), 'TCC@θ': round(m['primary_tcc'], 2),
                 'Mean P': round(m['mean_pvalue'], 3), 'Mean PBS': round(m['mean_pbs'], 3),
@@ -728,13 +743,13 @@ if is_run_all or is_step or is_reset:
             return True
 
         # All retries exhausted
-        status_text.error(f"🛑 Failed to assemble Form {form_idx+1} after {max_retries} retries.")
+        status_text.error(f"🛑 Failed to assemble Form {form_idx+1} after {max_retries} sampling attempts. {last_error} Relax constraints or increase the pool multiplier/time limit.")
         return False
 
     # ---- Helper: initialize or get session state ----
-    def _init_cbc_state():
-        """Create fresh CBC session state."""
-        st.session_state['cbc_tracker'] = ItemUsageTracker(
+    def _init_cpsat_state():
+        """Create fresh CP-SAT session state."""
+        st.session_state['cpsat_tracker'] = ItemUsageTracker(
             df,
             global_max=rules_payload.get('exposure_global_max', 2),
             domain_max=rules_payload.get('domain_exposure_limits', None),
@@ -742,36 +757,36 @@ if is_run_all or is_step or is_reset:
             n_forms=n_forms,
             test_length=test_len,
         )
-        st.session_state['cbc_forms'] = []
-        st.session_state['cbc_overview_rows'] = []
-        st.session_state['cbc_cumulative_ids'] = set()
+        st.session_state['cpsat_forms'] = []
+        st.session_state['cpsat_overview_rows'] = []
+        st.session_state['cpsat_cumulative_ids'] = set()
         fig_t = go.Figure()
         fig_t.update_layout(title="Test Information Functions (TIF)",
                             xaxis_title="Theta (θ)", yaxis_title="Information", height=400)
         fig_c = go.Figure()
         fig_c.update_layout(title="Test Characteristic Curve (TCC)",
                             xaxis_title="Theta (θ)", yaxis_title="Expected Score", height=400)
-        st.session_state['cbc_fig_tif'] = fig_t
-        st.session_state['cbc_fig_tcc'] = fig_c
+        st.session_state['cpsat_fig_tif'] = fig_t
+        st.session_state['cpsat_fig_tcc'] = fig_c
 
 
     # ==== Handle Reset ====
     if is_reset:
-        _init_cbc_state()
+        _init_cpsat_state()
         status_text.info("🔄 Reset complete. Ready to assemble forms.")
 
     # ==== Handle Step Button ====
     elif is_step:
         # Initialize state if first step
-        if 'cbc_tracker' not in st.session_state:
-            _init_cbc_state()
+        if 'cpsat_tracker' not in st.session_state:
+            _init_cpsat_state()
 
-        tracker = st.session_state['cbc_tracker']
-        all_forms = st.session_state['cbc_forms']
-        overview_rows = st.session_state['cbc_overview_rows']
-        cumulative_used_ids = st.session_state['cbc_cumulative_ids']
-        fig_tif = st.session_state['cbc_fig_tif']
-        fig_tcc = st.session_state['cbc_fig_tcc']
+        tracker = st.session_state['cpsat_tracker']
+        all_forms = st.session_state['cpsat_forms']
+        overview_rows = st.session_state['cpsat_overview_rows']
+        cumulative_used_ids = st.session_state['cpsat_cumulative_ids']
+        fig_tif = st.session_state['cpsat_fig_tif']
+        fig_tcc = st.session_state['cpsat_fig_tcc']
         x_vals = np.linspace(-3, 3, 100)
         max_overlap = rules_payload.get('max_overlap_threshold', 0.3)
 
@@ -782,31 +797,31 @@ if is_run_all or is_step or is_reset:
                 f"🔒 Domain limits: "
                 + " · ".join([f"{d}: ≤{l}" for d, l in sorted(tracker.domain_max_usage.items())])
             )
-            _cbc_assemble_one_form(
+            _cpsat_assemble_one_form(
                 tracker, all_forms, overview_rows, cumulative_used_ids,
                 fig_tif, fig_tcc, x_vals, max_overlap
             )
 
     # ==== Handle Run All ====
     elif is_run_all:
-        _init_cbc_state()
-        tracker = st.session_state['cbc_tracker']
-        all_forms = st.session_state['cbc_forms']
-        overview_rows = st.session_state['cbc_overview_rows']
-        cumulative_used_ids = st.session_state['cbc_cumulative_ids']
-        fig_tif = st.session_state['cbc_fig_tif']
-        fig_tcc = st.session_state['cbc_fig_tcc']
+        _init_cpsat_state()
+        tracker = st.session_state['cpsat_tracker']
+        all_forms = st.session_state['cpsat_forms']
+        overview_rows = st.session_state['cpsat_overview_rows']
+        cumulative_used_ids = st.session_state['cpsat_cumulative_ids']
+        fig_tif = st.session_state['cpsat_fig_tif']
+        fig_tcc = st.session_state['cpsat_fig_tcc']
         x_vals = np.linspace(-3, 3, 100)
         max_overlap = rules_payload.get('max_overlap_threshold', 0.3)
 
-        status_text.info("⚡ Initializing CBC Sequential LOFT...")
+        status_text.info("⚡ Initializing CP-SAT Sequential LOFT...")
         domain_info_placeholder.caption(
             f"🔒 Domain limits: "
             + " · ".join([f"{d}: ≤{l}" for d, l in sorted(tracker.domain_max_usage.items())])
         )
 
         for _ in range(n_forms):
-            success = _cbc_assemble_one_form(
+            success = _cpsat_assemble_one_form(
                 tracker, all_forms, overview_rows, cumulative_used_ids,
                 fig_tif, fig_tcc, x_vals, max_overlap
             )
@@ -814,9 +829,9 @@ if is_run_all or is_step or is_reset:
                 break
 
     # ── Final Summary (shown after Run All or final Step) ──
-    _final_forms = st.session_state.get('cbc_forms', [])
-    _final_trk = st.session_state.get('cbc_tracker')
-    _final_rows = st.session_state.get('cbc_overview_rows', [])
+    _final_forms = st.session_state.get('cpsat_forms', [])
+    _final_trk = st.session_state.get('cpsat_tracker')
+    _final_rows = st.session_state.get('cpsat_overview_rows', [])
 
     if len(_final_forms) >= 1:
         # Exposure Statistics
@@ -861,20 +876,20 @@ if is_run_all or is_step or is_reset:
         st.download_button(
             label=f"📥 Download {len(_final_forms)} Form(s) as Excel",
             data=excel_buffer.getvalue(),
-            file_name="LOFT_CBC_Forms.xlsx",
+            file_name="LOFT_CP_SAT_Forms.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
             use_container_width=True
         )
 
 
-# ==================== Restore CBC Step Mode State on Page Reload ====================
+# ==================== Restore CP-SAT Step Mode State on Page Reload ====================
 if not is_run_all and not is_step and not is_reset:
-    if 'cbc_forms' in st.session_state and st.session_state['cbc_forms']:
-        _forms = st.session_state['cbc_forms']
-        _rows = st.session_state.get('cbc_overview_rows', [])
-        _cids = st.session_state.get('cbc_cumulative_ids', set())
-        _trk = st.session_state.get('cbc_tracker')
+    if 'cpsat_forms' in st.session_state and st.session_state['cpsat_forms']:
+        _forms = st.session_state['cpsat_forms']
+        _rows = st.session_state.get('cpsat_overview_rows', [])
+        _cids = st.session_state.get('cpsat_cumulative_ids', set())
+        _trk = st.session_state.get('cpsat_tracker')
         fi = len(_forms)
 
         live_progress.progress(min(fi / n_forms, 1.0))
@@ -896,8 +911,8 @@ if not is_run_all and not is_step and not is_reset:
         else:
             status_text.success(f"🎉 All {n_forms} forms assembled!")
 
-        ftif = st.session_state.get('cbc_fig_tif')
-        ftcc = st.session_state.get('cbc_fig_tcc')
+        ftif = st.session_state.get('cpsat_fig_tif')
+        ftcc = st.session_state.get('cpsat_fig_tcc')
         if ftif:
             plot_placeholder_tif.plotly_chart(ftif, use_container_width=True, key='tif_restore')
         if ftcc:
@@ -967,7 +982,7 @@ if not is_run_all and not is_step and not is_reset:
             st.download_button(
                 label=f"📥 Download {len(_forms)} Form(s) as Excel",
                 data=excel_buffer.getvalue(),
-                file_name="LOFT_CBC_Forms.xlsx",
+                file_name="LOFT_CP_SAT_Forms.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
                 use_container_width=True
