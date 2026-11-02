@@ -1,0 +1,215 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1370" viewBox="0 0 1440 1370" role="img" aria-labelledby="title desc">
+<title id="title">MMLE–EM Learning Lab interface design preview</title><desc id="desc">Proposed Streamlit layout with global settings at left, response-generation controls at left, six tabs at top including result validation, and equation/explanation/notation controls, and an E-step walkthrough with likelihood, prior and posterior views. All curves are schematic; no estimates were computed.</desc>
+<g font-family="Arial, Helvetica, sans-serif">
+<rect x="0" y="0" width="1440" height="1370" rx="0" fill="#f5f7fb" stroke="none"/>
+<rect x="0" y="0" width="1440" height="90" rx="0" fill="#ffffff" stroke="none"/>
+<line x1="0" y1="90" x2="1440" y2="90" stroke="#d9dfeb" stroke-width="1"/>
+<text x="28" y="35" fill="#17273f" font-size="25" font-weight="700">MMLE–EM Learning Lab</text>
+<text x="29" y="62" fill="#607086" font-size="14" font-weight="400">Understand how responses, population weights, and calibration constraints work together.</text>
+<rect x="1100" y="25" width="130" height="29" rx="5" fill="#e9efff" stroke="#b1c3f6"/>
+<text x="1110" y="45" fill="#234c9e" font-size="12" font-weight="600">Guided • active</text>
+<rect x="1243" y="25" width="90" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="1253" y="45" fill="#5c6b80" font-size="12" font-weight="600">Explore</text>
+<text x="1100" y="74" fill="#607086" font-size="11" font-weight="700">DESIGN PREVIEW</text>
+<rect x="0" y="91" width="273" height="1279" rx="0" fill="#edf1f8" stroke="none"/>
+<line x1="273" y1="91" x2="273" y2="1370" stroke="#d9dfeb" stroke-width="1"/>
+<text x="23" y="125" fill="#607086" font-size="12" font-weight="700">EXPERIMENT SETTINGS</text>
+<text x="23" y="153" fill="#5c6b80" font-size="12" font-weight="600">Learning scenario</text>
+<rect x="23" y="163" width="226" height="36" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="35" y="186" fill="#28354a" font-size="14" font-weight="400">One 2PL EM cycle</text>
+<text x="229" y="186" fill="#28354a" font-size="14" font-weight="400">⌄</text>
+<text x="23" y="233" fill="#40536e" font-size="13" font-weight="700">Calibration design</text>
+<rect x="23" y="251" width="226" height="34" rx="5" fill="#dce7ff" stroke="#a5bcec"/>
+<text x="35" y="273" fill="#204a9c" font-size="13" font-weight="600">Standard MMLE–EM</text>
+<rect x="23" y="293" width="226" height="34" rx="5" fill="#ffffff" stroke="#d5ddea"/>
+<text x="35" y="315" fill="#43536b" font-size="13" font-weight="400">Concurrent groups</text>
+<rect x="23" y="335" width="226" height="34" rx="5" fill="#ffffff" stroke="#d5ddea"/>
+<text x="35" y="357" fill="#43536b" font-size="13" font-weight="400">Fixed bank anchors</text>
+<rect x="23" y="377" width="226" height="34" rx="5" fill="#ffffff" stroke="#d5ddea"/>
+<text x="35" y="399" fill="#43536b" font-size="13" font-weight="400">Fixed anchors + concurrent</text>
+<text x="23" y="445" fill="#5c6b80" font-size="12" font-weight="600">IRT model</text>
+<rect x="23" y="455" width="226" height="36" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="35" y="478" fill="#28354a" font-size="14" font-weight="400">Unidimensional 2PL</text>
+<text x="229" y="478" fill="#28354a" font-size="14" font-weight="400">⌄</text>
+<text x="23" y="529" fill="#5c6b80" font-size="12" font-weight="600">Ability distribution</text>
+<rect x="23" y="539" width="226" height="36" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="35" y="562" fill="#28354a" font-size="14" font-weight="400">Normal</text>
+<text x="229" y="562" fill="#28354a" font-size="14" font-weight="400">⌄</text>
+<text x="23" y="610" fill="#40536e" font-size="13" font-weight="700">What fixes the scale?</text>
+<text x="23" y="635" fill="#28354a" font-size="13" font-weight="400">Population mean = 0</text>
+<text x="23" y="658" fill="#28354a" font-size="13" font-weight="400">Population SD = 1</text>
+<text x="23" y="704" fill="#5c6b80" font-size="12" font-weight="600">Item parameter priors</text>
+<rect x="23" y="714" width="226" height="36" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="35" y="737" fill="#28354a" font-size="14" font-weight="400">Off · pure MMLE</text>
+<text x="229" y="737" fill="#28354a" font-size="14" font-weight="400">⌄</text>
+<text x="23" y="786" fill="#40536e" font-size="14" font-weight="700">Response generation</text>
+<text x="23" y="812" fill="#607086" font-size="13" font-weight="400">N/group: 1,000 · Items: 20</text>
+<text x="23" y="834" fill="#607086" font-size="12" font-weight="400">True a / b / c · c for 3PL only</text>
+<text x="23" y="856" fill="#607086" font-size="12" font-weight="400">Seed · forms · missingness</text>
+<rect x="23" y="875" width="226" height="37" rx="5" fill="#ffffff" stroke="#a5bcec"/>
+<text x="60" y="899" fill="#234c9e" font-size="13" font-weight="700">Generate responses</text>
+<rect x="23" y="933" width="226" height="43" rx="5" fill="#2d5eb2" stroke="none"/>
+<text x="82" y="960" fill="#ffffff" font-size="14" font-weight="700">Run calibration</text>
+<text x="23" y="1004" fill="#607086" font-size="12" font-weight="400">Generate changes the dataset.</text>
+<text x="23" y="1026" fill="#607086" font-size="12" font-weight="400">Fitting / playback reuse responses.</text>
+<text x="315" y="125" fill="#607086" font-size="15" font-weight="400">Design</text>
+<text x="425" y="125" fill="#234f9c" font-size="15" font-weight="700">EM walkthrough</text>
+<rect x="410" y="142" width="190" height="3" rx="0" fill="#2d5eb2" stroke="none"/>
+<text x="625" y="125" fill="#607086" font-size="15" font-weight="400">Results</text>
+<text x="745" y="125" fill="#607086" font-size="15" font-weight="400">Validation</text>
+<text x="880" y="125" fill="#607086" font-size="15" font-weight="400">Compare</text>
+<text x="1010" y="125" fill="#607086" font-size="15" font-weight="400">Method notes</text>
+<line x1="297" y1="147" x2="1415" y2="147" stroke="#d9dfeb" stroke-width="1"/>
+<text x="300" y="185" fill="#17273f" font-size="24" font-weight="700">2 · Watch one EM cycle</text>
+<text x="300" y="211" fill="#607086" font-size="14" font-weight="400">Same engine, different fixed / shared / free constraints.</text>
+<rect x="300" y="233" width="1114" height="46" rx="6" fill="#eaf0fc" stroke="none"/>
+<text x="316" y="262" fill="#355782" font-size="14" font-weight="600">Current example: standard calibration · 2PL · fixed normal population · no item priors</text>
+<rect x="300" y="299" width="93" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="310" y="319" fill="#5c6b80" font-size="12" font-weight="600">Previous</text>
+<rect x="402" y="299" width="74" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="412" y="319" fill="#5c6b80" font-size="12" font-weight="600">Next</text>
+<rect x="485" y="299" width="100" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="495" y="319" fill="#5c6b80" font-size="12" font-weight="600">Play / Pause</text>
+<rect x="594" y="299" width="87" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="604" y="319" fill="#5c6b80" font-size="12" font-weight="600">Restart</text>
+<text x="707" y="319" fill="#607086" font-size="13" font-weight="400">Cycle selector</text>
+<line x1="811" y1="314" x2="1085" y2="314" stroke="#bdc9de" stroke-width="5"/>
+<rect x="845" y="305" width="6" height="18" rx="2" fill="#2d5eb2" stroke="none"/>
+<rect x="1112" y="299" width="140" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="1122" y="319" fill="#5c6b80" font-size="12" font-weight="600">Run one cycle</text>
+<rect x="1260" y="299" width="154" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="1270" y="319" fill="#5c6b80" font-size="12" font-weight="600">Run to stopping rule</text>
+<rect x="300" y="353" width="177" height="55" rx="6" fill="#ffffff" stroke="#d7deea"/>
+<text x="311" y="376" fill="#2d5eb2" font-size="12" font-weight="700">1</text>
+<text x="311" y="395" fill="#43536b" font-size="12" font-weight="600">Current model</text>
+<rect x="486" y="353" width="177" height="55" rx="6" fill="#dce7ff" stroke="#a5bcec"/>
+<text x="497" y="376" fill="#2d5eb2" font-size="12" font-weight="700">2</text>
+<text x="497" y="395" fill="#234c9e" font-size="12" font-weight="600">E-step</text>
+<rect x="672" y="353" width="177" height="55" rx="6" fill="#ffffff" stroke="#d7deea"/>
+<text x="683" y="376" fill="#2d5eb2" font-size="12" font-weight="700">3</text>
+<text x="683" y="395" fill="#43536b" font-size="12" font-weight="600">Expected counts</text>
+<rect x="858" y="353" width="177" height="55" rx="6" fill="#ffffff" stroke="#d7deea"/>
+<text x="869" y="376" fill="#2d5eb2" font-size="12" font-weight="700">4</text>
+<text x="869" y="395" fill="#43536b" font-size="12" font-weight="600">Item M-step</text>
+<rect x="1044" y="353" width="177" height="55" rx="6" fill="#ffffff" stroke="#d7deea"/>
+<text x="1055" y="376" fill="#2d5eb2" font-size="12" font-weight="700">5</text>
+<text x="1055" y="395" fill="#43536b" font-size="12" font-weight="600">Population update</text>
+<rect x="1230" y="353" width="177" height="55" rx="6" fill="#ffffff" stroke="#d7deea"/>
+<text x="1241" y="376" fill="#2d5eb2" font-size="12" font-weight="700">6</text>
+<text x="1241" y="395" fill="#43536b" font-size="12" font-weight="600">Cycle check</text>
+<rect x="300" y="428" width="205" height="29" rx="5" fill="#e9efff" stroke="#b1c3f6"/>
+<text x="310" y="448" fill="#234c9e" font-size="12" font-weight="600">E-step playback</text>
+<rect x="515" y="428" width="230" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="525" y="448" fill="#5c6b80" font-size="12" font-weight="600">Convergence playback</text>
+<text x="775" y="448" fill="#607086" font-size="12" font-weight="400">Recorded states · pause or step</text>
+<rect x="300" y="464" width="145" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="310" y="484" fill="#5c6b80" font-size="12" font-weight="600">Group: reference</text>
+<rect x="455" y="464" width="190" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="465" y="484" fill="#5c6b80" font-size="12" font-weight="600">Person / response pattern</text>
+<rect x="655" y="464" width="180" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="665" y="484" fill="#5c6b80" font-size="12" font-weight="600">All cycles / selected range</text>
+<text x="1125" y="485" fill="#7a8698" font-size="12" font-weight="400">Schematic views</text>
+<rect x="300" y="512" width="356" height="250" rx="7" fill="#ffffff" stroke="#d7deea"/>
+<text x="317" y="541" fill="#273e61" font-size="17" font-weight="700">Response likelihood</text>
+<text x="317" y="565" fill="#607086" font-size="11" font-weight="400">How well does each ability explain the answers?</text>
+<line x1="339" y1="594" x2="339" y2="706" stroke="#9eacc1" stroke-width="1"/>
+<line x1="339" y1="706" x2="633" y2="706" stroke="#9eacc1" stroke-width="1"/>
+<text x="444" y="738" fill="#607086" font-size="12" font-weight="400">Ability θ</text>
+<polyline points="339.00,705.58 343.75,705.43 348.50,705.24 353.25,704.99 358.00,704.68 362.75,704.28 367.50,703.77 372.25,703.15 377.00,702.37 381.75,701.43 386.50,700.29 391.25,698.92 396.00,697.29 400.75,695.38 405.50,693.16 410.25,690.60 415.00,687.68 419.75,684.39 424.50,680.72 429.25,676.66 434.00,672.24 438.75,667.46 443.50,662.38 448.25,657.03 453.00,651.47 457.75,645.79 462.50,640.06 467.25,634.37 472.00,628.84 476.75,623.57 481.50,618.66 486.25,614.22 491.00,610.35 495.75,607.13 500.50,604.65 505.25,602.96 510.00,602.11 514.75,602.11 519.50,602.96 524.25,604.65 529.00,607.13 533.75,610.35 538.50,614.22 543.25,618.66 548.00,623.57 552.75,628.84 557.50,634.37 562.25,640.06 567.00,645.79 571.75,651.47 576.50,657.03 581.25,662.38 586.00,667.46 590.75,672.24 595.50,676.66 600.25,680.72 605.00,684.39 609.75,687.68 614.50,690.60 619.25,693.16 624.00,695.38" fill="none" stroke="#54749f" stroke-width="3"/>
+<text x="382.5" y="723" fill="#7a8698" font-size="10" font-weight="400">-2</text>
+<text x="477.5" y="723" fill="#7a8698" font-size="10" font-weight="400">0</text>
+<text x="572.5" y="723" fill="#7a8698" font-size="10" font-weight="400">2</text>
+<rect x="679" y="512" width="356" height="250" rx="7" fill="#ffffff" stroke="#d7deea"/>
+<text x="696" y="541" fill="#273e61" font-size="17" font-weight="700">Population prior</text>
+<text x="696" y="565" fill="#607086" font-size="11" font-weight="400">How much population mass is at each node?</text>
+<line x1="718" y1="594" x2="718" y2="706" stroke="#9eacc1" stroke-width="1"/>
+<line x1="718" y1="706" x2="1012" y2="706" stroke="#9eacc1" stroke-width="1"/>
+<text x="823" y="738" fill="#607086" font-size="12" font-weight="400">Ability θ</text>
+<polyline points="718.00,704.84 722.75,704.45 727.50,703.94 732.25,703.28 737.00,702.46 741.75,701.43 746.50,700.16 751.25,698.62 756.00,696.75 760.75,694.53 765.50,691.93 770.25,688.89 775.00,685.42 779.75,681.48 784.50,677.08 789.25,672.24 794.00,666.97 798.75,661.33 803.50,655.38 808.25,649.21 813.00,642.92 817.75,636.63 822.50,630.48 827.25,624.60 832.00,619.13 836.75,614.22 841.50,610.00 846.25,606.58 851.00,604.06 855.75,602.52 860.50,602.00 865.25,602.52 870.00,604.06 874.75,606.58 879.50,610.00 884.25,614.22 889.00,619.13 893.75,624.60 898.50,630.48 903.25,636.63 908.00,642.92 912.75,649.21 917.50,655.38 922.25,661.33 927.00,666.97 931.75,672.24 936.50,677.08 941.25,681.48 946.00,685.42 950.75,688.89 955.50,691.93 960.25,694.53 965.00,696.75 969.75,698.62 974.50,700.16 979.25,701.43 984.00,702.46 988.75,703.28 993.50,703.94 998.25,704.45 1003.00,704.84" fill="none" stroke="#ba8650" stroke-width="3"/>
+<text x="761.5" y="723" fill="#7a8698" font-size="10" font-weight="400">-2</text>
+<text x="856.5" y="723" fill="#7a8698" font-size="10" font-weight="400">0</text>
+<text x="951.5" y="723" fill="#7a8698" font-size="10" font-weight="400">2</text>
+<rect x="1058" y="512" width="356" height="250" rx="7" fill="#ffffff" stroke="#d7deea"/>
+<text x="1075" y="541" fill="#273e61" font-size="17" font-weight="700">Posterior weights</text>
+<text x="1075" y="565" fill="#607086" font-size="11" font-weight="400">Combine and normalize to sum to one</text>
+<line x1="1097" y1="594" x2="1097" y2="706" stroke="#9eacc1" stroke-width="1"/>
+<line x1="1097" y1="706" x2="1391" y2="706" stroke="#9eacc1" stroke-width="1"/>
+<text x="1202" y="738" fill="#607086" font-size="12" font-weight="400">Ability θ</text>
+<polyline points="1097.00,705.99 1101.75,705.99 1106.50,705.98 1111.25,705.97 1116.00,705.95 1120.75,705.91 1125.50,705.86 1130.25,705.77 1135.00,705.63 1139.75,705.43 1144.50,705.13 1149.25,704.70 1154.00,704.09 1158.75,703.23 1163.50,702.07 1168.25,700.53 1173.00,698.50 1177.75,695.91 1182.50,692.66 1187.25,688.68 1192.00,683.90 1196.75,678.30 1201.50,671.90 1206.25,664.75 1211.00,656.99 1215.75,648.79 1220.50,640.40 1225.25,632.10 1230.00,624.22 1234.75,617.09 1239.50,611.05 1244.25,606.38 1249.00,603.32 1253.75,602.04 1258.50,602.59 1263.25,604.95 1268.00,609.00 1272.75,614.53 1277.50,621.26 1282.25,628.88 1287.00,637.05 1291.75,645.44 1296.50,653.75 1301.25,661.71 1306.00,669.12 1310.75,675.83 1315.50,681.76 1320.25,686.86 1325.00,691.16 1329.75,694.69 1334.50,697.54 1339.25,699.78 1344.00,701.51 1348.75,702.81 1353.50,703.78 1358.25,704.48 1363.00,704.98 1367.75,705.32 1372.50,705.56 1377.25,705.72 1382.00,705.82" fill="none" stroke="#2f7f70" stroke-width="3"/>
+<text x="1140.5" y="723" fill="#7a8698" font-size="10" font-weight="400">-2</text>
+<text x="1235.5" y="723" fill="#7a8698" font-size="10" font-weight="400">0</text>
+<text x="1330.5" y="723" fill="#7a8698" font-size="10" font-weight="400">2</text>
+<text x="670" y="636" fill="#7a8698" font-size="24" font-weight="400">×</text>
+<text x="1048" y="636" fill="#7a8698" font-size="24" font-weight="400">→</text>
+<rect x="300" y="783" width="1114" height="75" rx="6" fill="#ffffff" stroke="#d7deea"/>
+<rect x="314" y="792" width="98" height="29" rx="5" fill="#e9efff" stroke="#b1c3f6"/>
+<text x="324" y="812" fill="#234c9e" font-size="12" font-weight="600">Equation</text>
+<rect x="422" y="792" width="118" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="432" y="812" fill="#5c6b80" font-size="12" font-weight="600">Explanation</text>
+<rect x="550" y="792" width="105" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="560" y="812" fill="#5c6b80" font-size="12" font-weight="600">Notation</text>
+<text x="681" y="812" fill="#607086" font-size="12" font-weight="400">One equation at a time · expand derivation</text>
+<text x="316" y="845" fill="#28354a" font-size="15" font-weight="600">Posterior weight = likelihood × population weight / total weighted likelihood</text>
+<text x="300" y="894" fill="#43536b" font-size="14" font-weight="700">Primary validation: irtQ agreement · Not run</text>
+<rect x="300" y="911" width="355" height="76" rx="6" fill="#ffffff" stroke="#d7deea"/>
+<text x="314" y="938" fill="#273e61" font-size="14" font-weight="700">Validate against irtQ · Not run</text>
+<text x="314" y="963" fill="#607086" font-size="12" font-weight="400">Primary criterion · matched endpoints</text>
+<rect x="679" y="911" width="356" height="76" rx="6" fill="#ffffff" stroke="#d7deea"/>
+<text x="693" y="938" fill="#273e61" font-size="14" font-weight="700">Supplement: simulation recovery</text>
+<text x="693" y="963" fill="#607086" font-size="12" font-weight="400">Not run · bias / RMSE across replications</text>
+<rect x="1058" y="911" width="356" height="76" rx="6" fill="#ffffff" stroke="#d7deea"/>
+<text x="1072" y="938" fill="#273e61" font-size="14" font-weight="700">Supplement: constraints &amp; stability</text>
+<text x="1072" y="963" fill="#607086" font-size="12" font-weight="400">Not run · anchors, weights, and convergence</text>
+<text x="300" y="1040" fill="#17273f" font-size="19" font-weight="700">Item-prior control panel · user decides</text>
+<text x="300" y="1063" fill="#607086" font-size="13" font-weight="400">Current: pure MMLE · a/b unbounded · c fixed 0 (2PL) · edits require a new fit</text>
+<rect x="300" y="1081" width="219" height="29" rx="5" fill="#e9efff" stroke="#b1c3f6"/>
+<text x="310" y="1101" fill="#234c9e" font-size="12" font-weight="600">Pure MMLE · all priors OFF</text>
+<rect x="529" y="1081" width="204" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="539" y="1101" fill="#5c6b80" font-size="12" font-weight="600">Reset irtQ defaults</text>
+<rect x="743" y="1081" width="213" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="753" y="1101" fill="#5c6b80" font-size="12" font-weight="600">Scope: all free items</text>
+<text x="974" y="1101" fill="#607086" font-size="12" font-weight="400">Bank anchors remain locked</text>
+<rect x="300" y="1125" width="355" height="173" rx="6" fill="#ffffff" stroke="#d7deea"/>
+<text x="314" y="1152" fill="#273e61" font-size="15" font-weight="700">a · M-step + prior</text>
+<rect x="561" y="1133" width="79" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="571" y="1153" fill="#5c6b80" font-size="12" font-weight="600">OFF</text>
+<rect x="314" y="1166" width="327" height="31" rx="4" fill="#f7f9fc" stroke="#d7deea"/>
+<text x="325" y="1187" fill="#607086" font-size="13" font-weight="400">Lognormal · prior scale D×a</text>
+<text x="622" y="1187" fill="#607086" font-size="13" font-weight="400">⌄</text>
+<text x="314" y="1219" fill="#607086" font-size="11" font-weight="600">Log mean</text>
+<text x="484" y="1219" fill="#607086" font-size="11" font-weight="600">Log SD</text>
+<rect x="314" y="1227" width="145" height="28" rx="4" fill="#f7f9fc" stroke="#d7deea"/>
+<text x="325" y="1247" fill="#607086" font-size="13" font-weight="400">0</text>
+<rect x="484" y="1227" width="145" height="28" rx="4" fill="#f7f9fc" stroke="#d7deea"/>
+<text x="495" y="1247" fill="#607086" font-size="13" font-weight="400">0.5</text>
+<text x="314" y="1280" fill="#607086" font-size="11" font-weight="400">Preview: density · mean / SD · quantiles</text>
+<rect x="679" y="1125" width="356" height="173" rx="6" fill="#ffffff" stroke="#d7deea"/>
+<text x="693" y="1152" fill="#273e61" font-size="15" font-weight="700">b · M-step + prior</text>
+<rect x="941" y="1133" width="79" height="29" rx="5" fill="#ffffff" stroke="#d7deea"/>
+<text x="951" y="1153" fill="#5c6b80" font-size="12" font-weight="600">OFF</text>
+<rect x="693" y="1166" width="328" height="31" rx="4" fill="#f7f9fc" stroke="#d7deea"/>
+<text x="704" y="1187" fill="#607086" font-size="13" font-weight="400">Normal · difficulty b</text>
+<text x="1002" y="1187" fill="#607086" font-size="13" font-weight="400">⌄</text>
+<text x="693" y="1219" fill="#607086" font-size="11" font-weight="600">Mean</text>
+<text x="863" y="1219" fill="#607086" font-size="11" font-weight="600">SD</text>
+<rect x="693" y="1227" width="145" height="28" rx="4" fill="#f7f9fc" stroke="#d7deea"/>
+<text x="704" y="1247" fill="#607086" font-size="13" font-weight="400">0</text>
+<rect x="863" y="1227" width="145" height="28" rx="4" fill="#f7f9fc" stroke="#d7deea"/>
+<text x="874" y="1247" fill="#607086" font-size="13" font-weight="400">1</text>
+<text x="693" y="1280" fill="#607086" font-size="11" font-weight="400">Preview: density · mean / SD · quantiles</text>
+<rect x="1058" y="1125" width="356" height="173" rx="6" fill="#e9edf2" stroke="#d7deea"/>
+<text x="1072" y="1152" fill="#7d8794" font-size="15" font-weight="700">c · M-step + prior</text>
+<rect x="1320" y="1133" width="79" height="29" rx="5" fill="#dde3eb" stroke="none"/>
+<text x="1330" y="1153" fill="#7d8794" font-size="12" font-weight="600">3PL only</text>
+<rect x="1072" y="1166" width="328" height="31" rx="4" fill="#dde3eb" stroke="#d1d8e2"/>
+<text x="1083" y="1187" fill="#7d8794" font-size="13" font-weight="400">Disabled · c fixed at 0 (2PL)</text>
+<text x="1072" y="1219" fill="#8993a1" font-size="11" font-weight="600">Shape α</text>
+<text x="1242" y="1219" fill="#8993a1" font-size="11" font-weight="600">Shape β</text>
+<rect x="1072" y="1227" width="145" height="28" rx="4" fill="#dde3eb" stroke="#d1d8e2"/>
+<text x="1083" y="1247" fill="#8993a1" font-size="13" font-weight="400">—</text>
+<rect x="1242" y="1227" width="145" height="28" rx="4" fill="#dde3eb" stroke="#d1d8e2"/>
+<text x="1253" y="1247" fill="#8993a1" font-size="13" font-weight="400">—</text>
+<text x="1072" y="1280" fill="#7d8794" font-size="11" font-weight="400">No guessing prior is applied in 2PL</text>
+<text x="300" y="1320" fill="#607086" font-size="12" font-weight="400">Reset keeps c fixed at 0 in 2PL; guessing-prior defaults apply only in 3PL. Bank anchors stay locked.</text>
+<text x="300" y="1347" fill="#607086" font-size="12" font-weight="400">Static design preview. Estimator, animations, and validation are planned; no results or validation checks have been computed.</text>
+</g></svg>
