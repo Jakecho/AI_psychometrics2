@@ -12,6 +12,17 @@ Use the framework Python by full path. If the project `.venv` is activated, a ba
 ≥ 1.58 for `st.iframe`) and lives in iCloud-synced storage, where imports can
 stall while placeholder files download.
 
+### Streamlit Community Cloud
+
+Deploy with **main file path `deploy/mmle/streamlit_app.py`** (Python 3.12). That
+launcher runs `MMLE_EM.py` from the repository root; Community Cloud installs only
+`deploy/mmle/requirements.txt`, not the root `requirements.txt` shared with the
+repository's other apps (which pulls in PyTorch and database drivers). The cloud
+image has no R, so irtQ validation shows **Unavailable** there; every other
+feature, including the internal constraint/arithmetic checks, works. Tested with
+the newest releases those requirements resolve to (Streamlit 1.66, pandas 3.1,
+Plotly 7.1): all tests pass and every tab renders without errors.
+
 The app has six main tabs: Design, EM walkthrough, Results, Validation,
 Compare, and Method notes. The bundled example contains 1,000 people and
 20 binary 2PL items. It is data, not a claim of completed validation.
