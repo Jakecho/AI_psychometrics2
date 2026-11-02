@@ -1,0 +1,5 @@
+local_lib <- Sys.getenv("SCORING_R_LIBRARY")
+if (nzchar(local_lib)) .libPaths(c(local_lib, .libPaths()))
+v <- function(p) tryCatch(as.character(packageVersion(p)), error = function(e) NULL)
+out <- list(R = R.version.string, irtQ = v("irtQ"), mirt = v("mirt"), TAM = v("TAM"), jsonlite = v("jsonlite"))
+cat(jsonlite::toJSON(out, auto_unbox = TRUE, null = "null"))
