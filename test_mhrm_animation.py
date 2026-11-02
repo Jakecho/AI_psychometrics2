@@ -157,7 +157,9 @@ def test_dashboard_embeds_player_and_item_selection_reuses_fit():
     widget('slider', 'Maximum RM Cycles (Stage 3)').set_value(50)
     widget('slider', 'Burn-in Cycles (Stage 1)').set_value(10)
     widget('slider', 'SEM Averaging Cycles (Stage 2)').set_value(20)
-    widget('checkbox', 'Cross-check with R mirt').uncheck()
+    cross_check = widget('checkbox', 'Cross-check with R mirt')
+    if not cross_check.disabled:  # disabled (and off) when R/mirt is not installed
+        cross_check.uncheck()
     app.run()
     app.button[0].click().run(timeout=60)
     assert not app.exception and not app.error
