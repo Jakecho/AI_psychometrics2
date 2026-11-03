@@ -2,7 +2,8 @@
 
 - **Platform.** The master prompt targets GPT Sites. This lab is a Streamlit application, which is the framework
   used by the existing MMLE-EM, Rasch and Ability-Scoring labs in this repository. It can be deployed to
-  Streamlit Community Cloud (see README). R is not installed there, so live reference runs show as *Unavailable*.
+  Streamlit Community Cloud (see README). R is not installed there, so live reference runs show as *Unavailable*;
+  page 12 shows the recorded local validation run instead, labelled as recorded.
 - **Reference material inspected.** The repository's MMLE_EM.py, mmle_engine.py, the Rasch_calibration and
   IRT_ability_scoring labs, their UI conventions, R bridges and tests. The MMLE-EM layout screenshot
   (`mmle-em-layout.png`) was not re-examined pixel by pixel; the visual system is taken from those labs' CSS.

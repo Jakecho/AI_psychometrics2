@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -71,6 +72,30 @@ if "validation" in st.session_state and st.session_state.validation[2] == d.iden
         settings=c.as_dict(), dataset=d.name, lab=dict(loglik=res.loglik, cycles=res.cycles, converged=res.converged),
         references=[{k: v for k, v in s.items()} for s in summary], environment=check_r()), default=str, indent=2),
         "validation_record.json", "application/json")
+st.subheader("Recorded local validation run")
+record_path = Path(__file__).resolve().parents[1] / "docs" / "validation_record.json"
+if not record_path.exists():
+    st.info("No recorded run found (docs/validation_record.json). Generate it with "
+            "`python -m r_reference.run_validation`.")
+else:
+    rec = json.loads(record_path.read_text())
+    env = rec["environment"]
+    st.info(f"**Recorded, not live.** These numbers come from the 19 fixed simulated cases run on "
+            f"{rec['date']} with {env.get('R')} · TAM {env.get('TAM')} · irtQ {env.get('irtQ')} · mirt {env.get('mirt')} "
+            f"({rec['grid']}, tight tolerances). They describe those cases only, not your current data or settings; "
+            "use the live check above when R is available.")
+    view = pd.DataFrame([dict(package=f"{r['package']} {r.get('version') or ''}".strip(), setup=r["setup"],
+                              status=r["status"], max_item_diff=r.get("max_item_diff"),
+                              max_moment_diff=r.get("max_moment_diff"), loglik_lab=r.get("loglik_lab"),
+                              loglik_ref=r.get("loglik_ref"), max_density_TV=r.get("max_density_TV"), note=r["note"])
+                         for r in rec["rows"]])
+    sci = ("max_item_diff", "max_moment_diff", "max_density_TV")
+    st.markdown("**Agreement cases** (asserted by `tests/test_reference.py`)")
+    table(view[[r["kind"] == "agreement" for r in rec["rows"]]], digits=4, sci=sci)
+    st.markdown("**Documented differences** (explained in docs/VALIDATION.md, not asserted)")
+    table(view[[r["kind"] == "difference" for r in rec["rows"]]], digits=4, sci=sci)
+    st.download_button("Download recorded run (JSON)", record_path.read_text(), "validation_record.json",
+                       "application/json", key="recorded_dl")
 interpret("Agreement to about 1e-5 is expected when both sides solve the same problem to tight tolerance (TAM PCM/RSM, "
           "irtQ GPCM/GRM with fixed normal, estimated normal via posterior moments, FIPC MEM/OEM, MG-FIPC; mirt "
           "single/multigroup). Expected, explained differences: (1) **free histograms** — irtQ stops on item-parameter "

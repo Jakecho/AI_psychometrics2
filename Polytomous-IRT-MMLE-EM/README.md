@@ -25,8 +25,9 @@ library shared with the other labs). Without R, the app works and reference resu
 
 Repository `Jakecho/AI_psychometrics2`, branch `main`, main file path
 `Polytomous-IRT-MMLE-EM/Polytomous_MMLE_EM.py`. Cloud installs this folder's `requirements.txt`. R is not
-available there, so the Reference Validation page reports TAM/irtQ/mirt as *Unavailable*. The executed results
-remain in `docs/VALIDATION_RESULTS.md`.
+available there, so live TAM/irtQ/mirt runs on the Reference Validation page report *Unavailable*. The page still
+shows the recorded local run (`docs/validation_record.json`, written with `docs/VALIDATION_RESULTS.md`), labelled
+with its date and package versions.
 
 ## Pages
 

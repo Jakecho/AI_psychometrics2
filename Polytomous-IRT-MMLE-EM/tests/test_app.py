@@ -153,3 +153,14 @@ def test_reference_page_runs_irtq():
     ok(at)
     res, out, *_ = at.session_state["validation"]
     assert out["irtQ"]["status"] == "Executed"
+
+
+def test_reference_page_shows_recorded_run_without_r(monkeypatch):
+    """Where R is missing (e.g. Streamlit Cloud), page 12 still shows the recorded local run, labelled as such."""
+    import r_reference.bridge as bridge
+    monkeypatch.setattr(bridge, "check_r", lambda *a, **k: dict(available=False, reason="Rscript was not found on PATH."))
+    at = app(ROOT / "pages/12_Reference_Validation.py", **small())
+    ok(at)
+    assert any("unverified" in w.value for w in at.warning)
+    assert any("Recorded, not live" in i.value for i in at.info)
+    assert len(at.dataframe) >= 3

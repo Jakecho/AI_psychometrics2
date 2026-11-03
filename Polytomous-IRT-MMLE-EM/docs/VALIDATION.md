@@ -20,8 +20,11 @@ never filled in when a package was not run.
 ## Executed results
 
 See [VALIDATION_RESULTS.md](VALIDATION_RESULTS.md). Regenerate it with `python -m r_reference.run_validation`; it
-records the software versions, settings, grid and tolerances. `tests/test_reference.py` asserts agreement for the
-same cases:
+records the software versions, settings, grid and tolerances. The same run writes `validation_record.json`, which
+page 12 shows as the **recorded local run** (labelled as recorded, with its date and versions) so the evidence is
+visible where R is unavailable, such as Streamlit Community Cloud. It describes those fixed cases only; live checks of
+the user's own data still need R. `tests/test_reference.py` asserts agreement for the same cases, and
+`tests/test_docs.py` checks the record against them:
 
 - **Agreement to about 1e-5** in item parameters, group moments and ℓ: TAM for PCM, RSM, RSM concurrent, PCM FIPC,
   RSM MG-FIPC and GPCM (tam.mml.2pl); irtQ for GPCM with a fixed normal, GPCM with a fixed empirical prior (`weights`), GRM concurrent, GPCM FIPC (MEM and OEM) and GRM MG-FIPC;
