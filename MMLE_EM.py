@@ -7,6 +7,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import asdict
 import json
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -89,6 +90,32 @@ def validation_record(result):
 @st.cache_data(ttl=60,show_spinner=False)
 def reference_environment():
     return check_irtq()
+
+RECORDED_VALIDATION=Path(__file__).resolve().parent/"docs"/"mmle_validation_record.json"
+
+def recorded_validation():
+    """The saved irtQ baseline run (written by mmle_record_validation.py), shown so the evidence is visible without R."""
+    st.markdown("**Recorded local irtQ validation run**")
+    if not RECORDED_VALIDATION.exists():
+        st.info("No recorded run found. Generate it with `python mmle_record_validation.py`."); return
+    rec=json.loads(RECORDED_VALIDATION.read_text());env=rec["environment"]
+    st.info(f"**Recorded, not live.** These results come from a run on {rec['date']} with {env.get('R')} · irtQ {env.get('irtQ')}: "
+            f"{len(rec['rows'])} fixed simulated cases (every design × 2PL/3PL × normal/histogram population, plus an OEM bank run). "
+            "They do not describe your current run; use 'Validate against irtQ' above when R is available. "
+            "Review = item coefficients agree but the histogram was still moving when irtQ stopped.")
+    summary=[]
+    for row in rec["rows"]:
+        values={c["check"].split(" (")[0]:c["value"] for c in row["checks"]}
+        summary.append(dict(design=row["design"],model=row["model"],population=row["population"],schedule=row["schedule"],
+                            status=row["status"],python_cycles=row["python_cycles"],
+                            **{k:f"{values[k]:.2e}" for k in ("Parameter endpoints","Response curves","Group mean / SD","Population total variation") if k in values}))
+    st.dataframe(pd.DataFrame(summary),hide_index=True,width="stretch")
+    counts=pd.Series([r["status"] for r in rec["rows"]]).value_counts()
+    st.caption(" · ".join(f"{k}: {v}" for k,v in counts.items())+" · values are maximum absolute Python − irtQ differences.")
+    with st.expander("Every recorded check and reason"):
+        st.dataframe(pd.DataFrame([dict(design=r["design"],model=r["model"],population=r["population"],schedule=r["schedule"],**c)
+                                   for r in rec["rows"] for c in r["checks"]]),hide_index=True,width="stretch")
+        st.download_button("Download recorded run (JSON)",RECORDED_VALIDATION.read_text(),"mmle_validation_record.json","application/json",key="recorded_dl")
 
 
 if "dataset" not in st.session_state:
@@ -469,6 +496,7 @@ with validation_tab:
                 if not popframe.empty: st.dataframe(popframe.groupby("group")[["mean_error","SD_error","density_TV"]].agg(["mean","std"]))
                 st.caption("Finite-sample recovery, not exact-truth acceptance. No standard-error or uncertainty-coverage claim is made.")
     else: st.info("Fit the Python model first, then execute the primary and supplementary checks.")
+    recorded_validation()
 
 with compare_tab:
     st.subheader("5 · Compare immutable experiments on saved responses")

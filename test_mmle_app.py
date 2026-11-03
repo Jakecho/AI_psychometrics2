@@ -35,6 +35,18 @@ class AppTests(unittest.TestCase):
         self.assertIn('Not validated',at.info[0].value)
         self.assertIsNone(at.session_state['run'])
 
+    def test_recorded_irtq_run_is_shown_and_consistent(self):
+        """The Validation tab shows the recorded local irtQ run (visible without R), labelled as recorded."""
+        at=self.create_app();self.assert_no_errors(at)
+        self.assertTrue(any('Recorded, not live' in i.value for i in at.info))
+        self.assertIn('Not validated',at.info[0].value)  # the recorded run never changes the live status
+        import mmle_record_validation as mrv
+        rec=json.loads(mrv.RECORD.read_text())
+        self.assertEqual(len(rec['rows']),len(list(mrv.cases())))
+        for row in rec['rows']:
+            self.assertNotEqual(row['status'],'Fail',row)
+            if row['population']=='Normal': self.assertEqual(row['status'],'Pass',row)
+
     def test_one_cycle_resume_and_no_regeneration(self):
         at=self.create_app();data_id=at.session_state['dataset'].identity
         choose(at.button,'Run one cycle').click().run();self.assert_no_errors(at)

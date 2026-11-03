@@ -31,8 +31,10 @@ SCORING_R_LIBRARY=~/my-r-lib Rscript install_packages.R      # or a project libr
 
 The app looks for packages in `SCORING_R_LIBRARY` first, then `~/.cache/ai_psychometrics2/R-library` (the shared
 project library on this machine), then R's defaults. Without R the Python methods still run and every reference check
-reads **Unavailable**; nothing is substituted for a missing reference result. Verified with R 4.4.3, irtQ 1.1.0,
-mirt 1.46.1 and TAM 4.3-25.
+reads **Unavailable**; nothing is substituted for a missing reference result. Page 10 (Validation tab) also shows the
+recorded local run, `docs/validation_record.json`, labelled "Recorded, not live" with its date and package versions, so
+the evidence is visible on Streamlit Community Cloud. Regenerate it with `python -m r_bridge.record_validation`.
+Verified with R 4.4.3, irtQ 1.1.0, mirt 1.46.1 and TAM 4.3-25.
 
 ## Pages
 

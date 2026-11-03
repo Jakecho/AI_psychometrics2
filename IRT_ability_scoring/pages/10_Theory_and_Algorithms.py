@@ -1,4 +1,6 @@
 import inspect
+import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -110,8 +112,8 @@ with tabs[3]:
 with tabs[4]:
     labels("ref", "edu")
     st.markdown("Runs irtQ, mirt and TAM on examples A–D and a mixed-format simulation (3PL + GRM, 120 examinees) and "
-                "compares with the Python results under matched settings. The recorded results of the full validation "
-                "are in `docs/VALIDATION.md`.")
+                "compares with the Python results under matched settings. Without R, the recorded local run below "
+                "shows the full comparison (also summarised in `docs/VALIDATION.md`).")
     if st.button("Run the validation suite", type="primary"):
         out = []
         sets = [fn() for fn in EXAMPLES.values()] + [simulate(120, seed=3, n_dich=12, dich_model="3PL", n_poly=4, poly_model="GRM")]
@@ -130,6 +132,23 @@ with tabs[4]:
         download(frame, "validation.csv")
         counts = frame["result"].value_counts().to_dict()
         st.markdown(" · ".join(f"**{k}**: {v}" for k, v in counts.items()))
+
+    st.subheader("Recorded local validation run")
+    record_path = Path(__file__).resolve().parents[1] / "docs" / "validation_record.json"
+    if not record_path.exists():
+        st.info("No recorded run found. Generate it with `python -m r_bridge.record_validation`.")
+    else:
+        rec = json.loads(record_path.read_text())
+        env = rec["environment"]
+        st.info(f"**Recorded, not live.** These rows come from a run on {rec['date']} with {env.get('R')} · "
+                f"irtQ {env.get('irtQ')} · mirt {env.get('mirt')} · TAM {env.get('TAM')}, on {len(rec['datasets'])} "
+                "fixed datasets (examples A–D and four seeded simulations) with the default scoring settings. They do "
+                "not reflect the current sidebar settings; use the button above when R is available.")
+        frame = pd.DataFrame(rec["rows"])
+        st.markdown(" · ".join(f"**{k}**: {v}" for k, v in frame["result"].value_counts().items()))
+        table(frame, 6, height=460, sci=("max_abs_diff_theta", "max_abs_diff_se"))
+        st.download_button("Download recorded run (JSON)", record_path.read_text(), "validation_record.json",
+                           "application/json", key="recorded_dl")
 
 with tabs[5]:
     st.markdown("""

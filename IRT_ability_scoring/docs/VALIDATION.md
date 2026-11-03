@@ -59,6 +59,10 @@ INV.TCC SE (a summed-score spread, not the delta-method SE the app reports).
 
 ### Executed comparison table
 
+A machine-readable copy of this comparison (same counts: 85 Pass, 10 Information, 1 Explained difference, plus
+16 Unavailable combinations) is `docs/validation_record.json`, written by `python -m r_bridge.record_validation`
+and shown on page 10 as the recorded run.
+
 | Dataset | Package | Method | Python counterpart | n | max |Δθ| | max |ΔSE| | Result |
 |---|---|---|---|---|---|---|---|
 | A · Rasch (8 patterns) | irtQ | MLE | MLE | 6 | 2.2e-16 | 2.2e-14 | Pass |

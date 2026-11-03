@@ -1,14 +1,13 @@
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 from components.ui import data, download, interpret, labels, page_setup, table
-from r_bridge.bridge import check_r, run_reference
-from rasch.cmle import cmle
-from rasch.jmle import JMLESettings, jmle
-from rasch.mml_em import MMLSettings, mml_em
-from rasch.scoring import score_persons
-from rasch.validation import compare, max_abs
+from r_bridge.bridge import check_r
+from r_bridge.suite import reference_suite
 
 page_setup("8 · Theory & Algorithms", "Equations, identification, standard errors and limitations — and live reference validation.")
 
@@ -78,27 +77,8 @@ else:
     st.caption(f"{info['R']} · TAM {info['TAM']} · eRm {info['eRm']}")
     if st.button("Run all reference comparisons", type="primary"):
         d = data()
-        rows = []
         with st.spinner("Fitting Python and R estimators on the current data…"):
-            j = jmle(d.X, JMLESettings())
-            rj = run_reference("JMLE", d.X, dict(adj=.3, bias=True, constraint="cases", tol=1e-4, max_iter=1000), d.item_ids)
-            rows += [dict(method="JMLE vs TAM::tam.jml", **r) for r in compare("JMLE", dict(b=j.b, se_b=j.se_b, theta=j.theta), rj)]
-            try:
-                c = cmle(d.X)
-                rc = run_reference("CMLE", d.X, {}, d.item_ids)
-                rows += [dict(method="CMLE vs eRm::RM", **r) for r in compare("CMLE", dict(b=c.b, se_b=c.se_b, cond_loglik=c.cond_loglik), rc, d.n_persons)]
-            except ValueError as e:
-                rows.append(dict(method="CMLE vs eRm::RM", check="Python CMLE", status=f"Not run: {e}"))
-            m = mml_em(d.X, MMLSettings())
-            s = dict(n_nodes=21, extent=6.0, estimate_variance=True, fixed_sd=1.0, tol=1e-4, max_iter=1000)
-            rm = run_reference("MML", d.X, s, d.item_ids)
-            rows += [dict(method="MML-EM vs TAM::tam.mml", **r) for r in compare("MML", dict(b=m.b, se_b=m.se_b_complete, se_label=" (complete-data)", variance=m.variance, loglik=m.loglik_tam), rm, d.n_persons)]
-            if rm.get("status") == "Executed":
-                w, wse = score_persons(d.X, rm["b"], "WLE")
-                for label, a, b2 in (("WLE abilities", w, rm["wle"]), ("WLE standard errors", wse, rm["wle_se"])):
-                    diff = max_abs(a, b2)
-                    rows.append(dict(method="WLE vs TAM::tam.wle", check=label, max_abs_difference=diff, tolerance=1e-3,
-                                     status="Pass" if diff <= 1e-3 else "Fail"))
+            rows = reference_suite(d.X, d.item_ids, d.n_persons)
         st.session_state.validation_rows = (d.identity, rows)
     saved = st.session_state.get("validation_rows")
     if saved and saved[0] == data().identity:
@@ -107,6 +87,22 @@ else:
         download(frame, "reference_validation.csv")
         n_pass = int((frame.status == "Pass").sum())
         st.markdown(f"**{n_pass} of {len(frame)} checks pass** (absolute tolerance 1e-3; per-person 1e-5 for log-likelihoods).")
+st.markdown("**Recorded local validation run**")
+record_path = Path(__file__).resolve().parents[1] / "docs" / "validation_record.json"
+if not record_path.exists():
+    st.info("No recorded run found. Generate it with `python -m r_bridge.record_validation`.")
+else:
+    rec = json.loads(record_path.read_text())
+    env = rec["environment"]
+    st.info(f"**Recorded, not live.** These checks come from a run on {rec['date']} with {env.get('R')} · "
+            f"TAM {env.get('TAM')} · eRm {env.get('eRm')}, on {len(rec['datasets'])} fixed simulated datasets "
+            f"({'; '.join(x['name'] for x in rec['datasets'])}). They do not describe the current dataset; use the "
+            "button above when R is available.")
+    rframe = pd.DataFrame(rec["rows"])
+    table(rframe, 7)
+    st.markdown(f"**{int((rframe.status == 'Pass').sum())} of {len(rframe)} recorded checks pass.**")
+    st.download_button("Download recorded run (JSON)", record_path.read_text(), "validation_record.json",
+                       "application/json", key="recorded_dl")
 interpret("Agreement means the transparent Python algorithms reproduce the R packages on these data. It is a check of "
           "implementation, not a proof that any estimator is unbiased for your data — that is what the simulation "
           "studies on page 7 address.")

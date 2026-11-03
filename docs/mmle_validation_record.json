@@ -1,0 +1,831 @@
+{
+  "date": "2026-11-03",
+  "environment": {
+    "R": "R version 4.4.3 (2025-02-28)",
+    "irtQ": "1.1.0"
+  },
+  "tolerances": {
+    "a_atol": 0.02,
+    "a_rtol": 0.01,
+    "b_atol": 0.02,
+    "b_rtol": 0.01,
+    "c_atol": 0.005,
+    "c_rtol": 0.01,
+    "curve": 0.01,
+    "moment": 0.02,
+    "density_tv": 0.02,
+    "loglik_per_person": 0.0001
+  },
+  "rows": [
+    {
+      "design": "Standard",
+      "model": "2PL",
+      "population": "Normal",
+      "schedule": "\u2014",
+      "status": "Pass",
+      "python_cycles": 26,
+      "python_stop": "Item stopping rule satisfied",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 0.0020203117928584424,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 0.0011950975241025175,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 1.4432899320127035e-15,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 4.0649286190831005e-16,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 2.152305230993079e-06,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 0.0004946174476271881,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Tolerances checked against an executed baseline: Python vs installed irtQ 1.1.0 on all 16 design/model/density configurations (N=500 per group, 12 items). Largest coefficient differences there: a 0.023, b 0.005, c 0.001; curves 0.002. Pass means every check is within these tolerances and the irtQ endpoint had stopped moving. It is endpoint agreement with one reference package, not proof of correctness, global optimality or instrument validity."
+    },
+    {
+      "design": "Standard",
+      "model": "2PL",
+      "population": "Histogram",
+      "schedule": "\u2014",
+      "status": "Review",
+      "python_cycles": 187,
+      "python_stop": "Item stopping rule satisfied",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 0.005957537318410422,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 0.001469507813980142,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 2.942298613084482e-05,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 0.04430470857203196,
+          "criterion": "\u2264 0.02",
+          "status": "Review"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 0.00023587821367345897,
+          "criterion": "\u2264 0.0001",
+          "status": "Review"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 0.00014231148468035748,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Density not converged (one more EM cycle moves a node mass by 2.1e-04 from the Python endpoint and 2.6e-04 from the irtQ endpoint; limit 1e-05). Item coefficients are compared strictly; population-dependent checks are Review until the density settles. Refit with 'Also require density stability' or a smaller item tolerance, then validate again."
+    },
+    {
+      "design": "Standard",
+      "model": "3PL",
+      "population": "Normal",
+      "schedule": "\u2014",
+      "status": "Pass",
+      "python_cycles": 21,
+      "python_stop": "Item stopping rule satisfied",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 7.603284702062396e-06,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 9.555159053431517e-07,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 1.4432899320127035e-15,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 4.0649286190831005e-16,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 8.725277439225465e-09,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 6.852794374578863e-05,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Tolerances checked against an executed baseline: Python vs installed irtQ 1.1.0 on all 16 design/model/density configurations (N=500 per group, 12 items). Largest coefficient differences there: a 0.023, b 0.005, c 0.001; curves 0.002. Pass means every check is within these tolerances and the irtQ endpoint had stopped moving. It is endpoint agreement with one reference package, not proof of correctness, global optimality or instrument validity."
+    },
+    {
+      "design": "Standard",
+      "model": "3PL",
+      "population": "Histogram",
+      "schedule": "\u2014",
+      "status": "Review",
+      "python_cycles": 500,
+      "python_stop": "Cycle limit reached",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 2.4806750519967835e-05,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 6.717962342750461e-06,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 4.278754017761344e-09,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 5.644466660702026e-06,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 1.2870474165538327e-08,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 0.00019921102015274528,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Density not converged (one more EM cycle moves a node mass by 1.0e-04 from the Python endpoint and 1.0e-04 from the irtQ endpoint; limit 1e-05). Item coefficients are compared strictly; population-dependent checks are Review until the density settles. Refit with 'Also require density stability' or a smaller item tolerance, then validate again."
+    },
+    {
+      "design": "Concurrent",
+      "model": "2PL",
+      "population": "Normal",
+      "schedule": "\u2014",
+      "status": "Pass",
+      "python_cycles": 80,
+      "python_stop": "Item stopping rule satisfied",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 0.00020183625778069647,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 9.541425898151878e-05,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 0.00010870878831958919,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 5.6404310333124606e-05,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 1.8649918274604715e-08,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 0.00010448627967574176,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Tolerances checked against an executed baseline: Python vs installed irtQ 1.1.0 on all 16 design/model/density configurations (N=500 per group, 12 items). Largest coefficient differences there: a 0.023, b 0.005, c 0.001; curves 0.002. Pass means every check is within these tolerances and the irtQ endpoint had stopped moving. It is endpoint agreement with one reference package, not proof of correctness, global optimality or instrument validity."
+    },
+    {
+      "design": "Concurrent",
+      "model": "2PL",
+      "population": "Histogram",
+      "schedule": "\u2014",
+      "status": "Review",
+      "python_cycles": 500,
+      "python_stop": "Cycle limit reached",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 7.18781166586524e-07,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 1.2907609014956023e-07,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 1.767026265309113e-07,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 7.908742742370902e-07,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 2.174911060137674e-10,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 0.00019373538428979487,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Density not converged (one more EM cycle moves a node mass by 8.3e-05 from the Python endpoint and 8.3e-05 from the irtQ endpoint; limit 1e-05). Item coefficients are compared strictly; population-dependent checks are Review until the density settles. Refit with 'Also require density stability' or a smaller item tolerance, then validate again."
+    },
+    {
+      "design": "Concurrent",
+      "model": "3PL",
+      "population": "Normal",
+      "schedule": "\u2014",
+      "status": "Pass",
+      "python_cycles": 86,
+      "python_stop": "Item stopping rule satisfied",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 9.442831910089211e-05,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 5.492566887643768e-06,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 5.401657708348218e-07,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 2.2642812954440257e-07,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 2.2783135136705823e-08,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 9.280997020799653e-05,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Tolerances checked against an executed baseline: Python vs installed irtQ 1.1.0 on all 16 design/model/density configurations (N=500 per group, 12 items). Largest coefficient differences there: a 0.023, b 0.005, c 0.001; curves 0.002. Pass means every check is within these tolerances and the irtQ endpoint had stopped moving. It is endpoint agreement with one reference package, not proof of correctness, global optimality or instrument validity."
+    },
+    {
+      "design": "Concurrent",
+      "model": "3PL",
+      "population": "Histogram",
+      "schedule": "\u2014",
+      "status": "Review",
+      "python_cycles": 500,
+      "python_stop": "Cycle limit reached",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 0.00010745626897445959,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 5.78658225630635e-06,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 6.654965873931218e-07,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 8.195751195639091e-06,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 2.7353944460628554e-09,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 0.0006657525022060184,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Density not converged (one more EM cycle moves a node mass by 1.2e-04 from the Python endpoint and 1.2e-04 from the irtQ endpoint; limit 1e-05). Item coefficients are compared strictly; population-dependent checks are Review until the density settles. Refit with 'Also require density stability' or a smaller item tolerance, then validate again."
+    },
+    {
+      "design": "Fixed bank anchors",
+      "model": "2PL",
+      "population": "Normal",
+      "schedule": "MEM",
+      "status": "Pass",
+      "python_cycles": 58,
+      "python_stop": "Item stopping rule satisfied",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 3.1459829337165957e-06,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 4.940884757997921e-07,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 2.527163538434962e-07,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 1.2961789677906354e-07,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 3.591503627831116e-11,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 8.757027608652379e-05,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Tolerances checked against an executed baseline: Python vs installed irtQ 1.1.0 on all 16 design/model/density configurations (N=500 per group, 12 items). Largest coefficient differences there: a 0.023, b 0.005, c 0.001; curves 0.002. Pass means every check is within these tolerances and the irtQ endpoint had stopped moving. It is endpoint agreement with one reference package, not proof of correctness, global optimality or instrument validity."
+    },
+    {
+      "design": "Fixed bank anchors",
+      "model": "2PL",
+      "population": "Histogram",
+      "schedule": "MEM",
+      "status": "Review",
+      "python_cycles": 262,
+      "python_stop": "Item stopping rule satisfied",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 2.291787542407775e-06,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 9.956596669913331e-07,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 5.018538645762405e-07,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 6.127852961638492e-07,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 1.4822489902144297e-10,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 9.951306279232242e-05,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Density not converged (one more EM cycle moves a node mass by 3.2e-04 from the Python endpoint and 3.2e-04 from the irtQ endpoint; limit 1e-05). Item coefficients are compared strictly; population-dependent checks are Review until the density settles. Refit with 'Also require density stability' or a smaller item tolerance, then validate again."
+    },
+    {
+      "design": "Fixed bank anchors",
+      "model": "3PL",
+      "population": "Normal",
+      "schedule": "MEM",
+      "status": "Pass",
+      "python_cycles": 86,
+      "python_stop": "Item stopping rule satisfied",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 3.9522622796717144e-07,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 5.903083291625144e-08,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 5.844316308678543e-08,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 3.091827350444497e-08,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 6.99981683283113e-10,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 9.247931091360684e-05,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Tolerances checked against an executed baseline: Python vs installed irtQ 1.1.0 on all 16 design/model/density configurations (N=500 per group, 12 items). Largest coefficient differences there: a 0.023, b 0.005, c 0.001; curves 0.002. Pass means every check is within these tolerances and the irtQ endpoint had stopped moving. It is endpoint agreement with one reference package, not proof of correctness, global optimality or instrument validity."
+    },
+    {
+      "design": "Fixed bank anchors",
+      "model": "3PL",
+      "population": "Histogram",
+      "schedule": "MEM",
+      "status": "Review",
+      "python_cycles": 231,
+      "python_stop": "Item stopping rule satisfied",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 0.006511206996986374,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 0.0020331658667862573,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 0.0003271296440667884,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 0.020826567818561313,
+          "criterion": "\u2264 0.02",
+          "status": "Review"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 8.559046175287221e-05,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 0.0001860522433250189,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Density not converged (one more EM cycle moves a node mass by 1.1e-04 from the Python endpoint and 1.4e-04 from the irtQ endpoint; limit 1e-05). Item coefficients are compared strictly; population-dependent checks are Review until the density settles. Refit with 'Also require density stability' or a smaller item tolerance, then validate again."
+    },
+    {
+      "design": "Concurrent + fixed bank anchors",
+      "model": "2PL",
+      "population": "Normal",
+      "schedule": "MEM",
+      "status": "Pass",
+      "python_cycles": 49,
+      "python_stop": "Item stopping rule satisfied",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 1.1703788658223857e-06,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 2.2872350335934044e-07,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 1.6656505175127734e-08,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 7.633143876761213e-09,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 7.657945388928055e-13,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 8.56942514082526e-05,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Tolerances checked against an executed baseline: Python vs installed irtQ 1.1.0 on all 16 design/model/density configurations (N=500 per group, 12 items). Largest coefficient differences there: a 0.023, b 0.005, c 0.001; curves 0.002. Pass means every check is within these tolerances and the irtQ endpoint had stopped moving. It is endpoint agreement with one reference package, not proof of correctness, global optimality or instrument validity."
+    },
+    {
+      "design": "Concurrent + fixed bank anchors",
+      "model": "2PL",
+      "population": "Histogram",
+      "schedule": "MEM",
+      "status": "Review",
+      "python_cycles": 63,
+      "python_stop": "Item stopping rule satisfied",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 0.000501423291384695,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 0.00015238516991078477,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 0.0003230067649439283,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 0.0032955158191597146,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 1.4751868938219558e-05,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 0.000100180573258557,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Density not converged (one more EM cycle moves a node mass by 1.5e-04 from the Python endpoint and 1.6e-04 from the irtQ endpoint; limit 1e-05). Item coefficients are compared strictly; population-dependent checks are Review until the density settles. Refit with 'Also require density stability' or a smaller item tolerance, then validate again."
+    },
+    {
+      "design": "Concurrent + fixed bank anchors",
+      "model": "3PL",
+      "population": "Normal",
+      "schedule": "MEM",
+      "status": "Pass",
+      "python_cycles": 102,
+      "python_stop": "Item stopping rule satisfied",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 0.003921015229225944,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 0.00014391566016136448,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 8.331738043365622e-05,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 4.294534354379754e-05,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 2.834024680851144e-07,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 3.2551892812371364e-06,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Tolerances checked against an executed baseline: Python vs installed irtQ 1.1.0 on all 16 design/model/density configurations (N=500 per group, 12 items). Largest coefficient differences there: a 0.023, b 0.005, c 0.001; curves 0.002. Pass means every check is within these tolerances and the irtQ endpoint had stopped moving. It is endpoint agreement with one reference package, not proof of correctness, global optimality or instrument validity."
+    },
+    {
+      "design": "Concurrent + fixed bank anchors",
+      "model": "3PL",
+      "population": "Histogram",
+      "schedule": "MEM",
+      "status": "Review",
+      "python_cycles": 500,
+      "python_stop": "Cycle limit reached",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 0.02316540626127228,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 0.0015480983231384027,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 0.003997156708965388,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 0.014855667940008125,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 2.975830404466251e-05,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        },
+        {
+          "check": "irtQ endpoint stationarity (one EM cycle from irtQ endpoint)",
+          "value": 0.0005530533288458095,
+          "criterion": "\u2264 0.001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Density not converged (one more EM cycle moves a node mass by 1.3e-04 from the Python endpoint and 1.4e-04 from the irtQ endpoint; limit 1e-05). Item coefficients are compared strictly; population-dependent checks are Review until the density settles. Refit with 'Also require density stability' or a smaller item tolerance, then validate again."
+    },
+    {
+      "design": "Fixed bank anchors",
+      "model": "2PL",
+      "population": "Normal",
+      "schedule": "OEM",
+      "status": "Pass",
+      "python_cycles": 1,
+      "python_stop": "One cycle completed (OEM; returned density not fed back)",
+      "checks": [
+        {
+          "check": "Parameter endpoints",
+          "value": 3.0700787334581037e-07,
+          "criterion": "Per-row absolute + relative allowance",
+          "status": "Pass"
+        },
+        {
+          "check": "Response curves (max absolute)",
+          "value": 6.12103902564165e-08,
+          "criterion": "\u2264 0.01",
+          "status": "Pass"
+        },
+        {
+          "check": "Group mean / SD (max absolute)",
+          "value": 2.886579864025407e-15,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Population total variation (max group)",
+          "value": 5.448870255827471e-16,
+          "criterion": "\u2264 0.02",
+          "status": "Pass"
+        },
+        {
+          "check": "Common-grid log likelihood / person",
+          "value": 6.481280252046418e-09,
+          "criterion": "\u2264 0.0001",
+          "status": "Pass"
+        }
+      ],
+      "reason": "Tolerances checked against an executed baseline: Python vs installed irtQ 1.1.0 on all 16 design/model/density configurations (N=500 per group, 12 items). Largest coefficient differences there: a 0.023, b 0.005, c 0.001; curves 0.002. Pass means every check is within these tolerances and the irtQ endpoint had stopped moving. It is endpoint agreement with one reference package, not proof of correctness, global optimality or instrument validity."
+    }
+  ]
+}

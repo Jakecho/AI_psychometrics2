@@ -19,7 +19,10 @@ launcher runs `MMLE_EM.py` from the repository root; Community Cloud installs on
 `deploy/mmle/requirements.txt`, not the root `requirements.txt` shared with the
 repository's other apps (which pulls in PyTorch and database drivers). The cloud
 image has no R, so irtQ validation shows **Unavailable** there; every other
-feature, including the internal constraint/arithmetic checks, works. Tested with
+feature, including the internal constraint/arithmetic checks, works. The Validation
+tab also shows the recorded local irtQ run (`docs/mmle_validation_record.json`,
+labelled "Recorded, not live" with its date and versions; regenerate with
+`python mmle_record_validation.py`). Tested with
 the newest releases those requirements resolve to (Streamlit 1.66, pandas 3.1,
 Plotly 7.1): all tests pass and every tab renders without errors.
 

@@ -136,3 +136,25 @@ def test_lab_reference_button():
     rows = at.session_state["wle_refrows"][0]
     assert {r["package"] for r in rows} == {"irtQ", "mirt", "TAM"}
     assert all(r["result"] in ("Pass", "Information") for r in rows)
+
+
+def test_theory_page_shows_recorded_validation():
+    """Where R is missing (e.g. Streamlit Cloud), page 10 still shows the recorded local run, labelled as such."""
+    at = app(ROOT / "pages/10_Theory_and_Algorithms.py")
+    no_errors(at)
+    assert any("Recorded, not live" in i.value for i in at.info)
+
+
+def test_recorded_validation_is_complete_and_has_no_failures():
+    import json
+
+    from r_bridge.record_validation import RECORD, SIMULATED
+    from scoring import ScoringSettings
+
+    rec = json.loads(RECORD.read_text())
+    assert rec["settings"] == ScoringSettings().as_dict()
+    assert len(rec["datasets"]) == 4 + len(SIMULATED)
+    results = {r["result"] for r in rec["rows"]}
+    assert results <= {"Pass", "Information", "Explained difference", "Unavailable"}, results
+    assert sum(r["result"] == "Pass" for r in rec["rows"]) > 0
+    assert all(r["package"] in ("TAM", "irtQ") for r in rec["rows"] if r["result"] == "Unavailable")

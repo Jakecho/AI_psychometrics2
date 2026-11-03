@@ -30,7 +30,9 @@ Every comparison passes on all three datasets, including missing responses and m
 3. **Extreme-score MLE.** `tam.wle(WLE = FALSE)` moves extreme scores by 0.3; the app reports ±∞.
 4. **Iteration paths** differ (TAM damping, L-BFGS-B vs eRm's optimiser); only endpoints are compared.
 
-The same checks run as automated tests (`tests/test_estimators.py`) and live on the Theory page
+A machine-readable copy of these checks on seeded versions of datasets A–C (36 of 36 pass) is
+`docs/validation_record.json`, written by `python -m r_bridge.record_validation` and shown on page 8 as the
+recorded run. The same checks run as automated tests (`tests/test_estimators.py`) and live on the Theory page
 ("Run all reference comparisons": 12 of 12 checks passed on the default dataset in the browser run).
 
 ## 2. Monte Carlo (finite-sample behaviour)

@@ -28,7 +28,9 @@ RASCH_R_LIBRARY=~/my-r-lib Rscript install_packages.R      # or a project librar
 The app looks for packages in `RASCH_R_LIBRARY` first, then
 `~/.cache/ai_psychometrics2/R-library` (the shared project library on this machine), then R's defaults.
 Without R the Python algorithms still run and every reference check reads **Unavailable**; nothing is
-substituted for a missing reference result.
+substituted for a missing reference result. Page 8 also shows the recorded local run,
+`docs/validation_record.json`, labelled "Recorded, not live" with its date and package versions, so the evidence is
+visible on Streamlit Community Cloud. Regenerate it with `python -m r_bridge.record_validation`.
 
 Verified here with R 4.4.3, TAM 4.3-25 and eRm 1.0-10.
 

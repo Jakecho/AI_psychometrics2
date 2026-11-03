@@ -132,3 +132,23 @@ def test_monte_carlo_holds_items_fixed_and_reports_empirical_sd():
     # The same true difficulty for each item in every replication.
     assert (rec.dropna(subset=["true"]).groupby("item").true.nunique() == 1).all()
     assert set(rec.method) == {"JMLE", "JMLE_raw", "CMLE", "MML"}
+
+
+def test_theory_page_shows_recorded_validation():
+    """Where R is missing (e.g. Streamlit Cloud), page 8 still shows the recorded local run, labelled as such."""
+    at = app(ROOT / "pages/8_Theory_and_Algorithms.py")
+    no_errors(at)
+    assert any("Recorded, not live" in i.value for i in at.info)
+
+
+def test_recorded_validation_covers_all_datasets_and_passes():
+    import json
+
+    from r_bridge.record_validation import DATASETS, RECORD
+
+    rec = json.loads(RECORD.read_text())
+    assert [d["name"] for d in rec["datasets"]] == [n for n, _ in DATASETS]
+    for name, _ in DATASETS:
+        methods = {r["method"] for r in rec["rows"] if r["dataset"] == name}
+        assert len(methods) == 4, (name, methods)          # JMLE, CMLE, MML-EM, WLE
+    assert all(r["status"] == "Pass" for r in rec["rows"]), [r for r in rec["rows"] if r["status"] != "Pass"]

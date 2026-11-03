@@ -1,0 +1,343 @@
+{
+  "date": "2026-11-03",
+  "environment": {
+    "R": "R version 4.4.3 (2025-02-28)",
+    "TAM": "4.3.25",
+    "eRm": "1.0.10"
+  },
+  "reference_settings": {
+    "JMLE": {
+      "adj": 0.3,
+      "bias": true,
+      "constraint": "cases",
+      "tol": 0.0001,
+      "max_iter": 1000
+    },
+    "MML": {
+      "n_nodes": 21,
+      "extent": 6.0,
+      "estimate_variance": true,
+      "fixed_sd": 1.0,
+      "tol": 0.0001,
+      "max_iter": 1000
+    }
+  },
+  "datasets": [
+    {
+      "name": "A: N = 500, J = 20, complete",
+      "simulation": {
+        "n_persons": 500,
+        "n_items": 20,
+        "seed": 2026
+      }
+    },
+    {
+      "name": "B: N = 500, J = 20, 10 % missing",
+      "simulation": {
+        "n_persons": 500,
+        "n_items": 20,
+        "missing": 0.1,
+        "seed": 2027
+      }
+    },
+    {
+      "name": "C: N = 300, J = 8, ability SD 2",
+      "simulation": {
+        "n_persons": 300,
+        "n_items": 8,
+        "theta_sd": 2.0,
+        "seed": 31
+      }
+    }
+  ],
+  "rows": [
+    {
+      "dataset": "A: N = 500, J = 20, complete",
+      "method": "JMLE vs TAM::tam.jml",
+      "check": "Item difficulties b",
+      "max_abs_difference": 1.6011402292903654e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "A: N = 500, J = 20, complete",
+      "method": "JMLE vs TAM::tam.jml",
+      "check": "Item standard errors",
+      "max_abs_difference": 1.312548875254116e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "A: N = 500, J = 20, complete",
+      "method": "JMLE vs TAM::tam.jml",
+      "check": "Person abilities",
+      "max_abs_difference": 6.038309621203553e-07,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "A: N = 500, J = 20, complete",
+      "method": "CMLE vs eRm::RM",
+      "check": "Item difficulties b",
+      "max_abs_difference": 8.37589516500259e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "A: N = 500, J = 20, complete",
+      "method": "CMLE vs eRm::RM",
+      "check": "Item standard errors",
+      "max_abs_difference": 8.461771037665544e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "A: N = 500, J = 20, complete",
+      "method": "CMLE vs eRm::RM",
+      "check": "Conditional log-likelihood per person",
+      "max_abs_difference": 1.1372321750968694e-11,
+      "tolerance": 1e-05,
+      "status": "Pass"
+    },
+    {
+      "dataset": "A: N = 500, J = 20, complete",
+      "method": "MML-EM vs TAM::tam.mml",
+      "check": "Item difficulties b",
+      "max_abs_difference": 5.753205243270998e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "A: N = 500, J = 20, complete",
+      "method": "MML-EM vs TAM::tam.mml",
+      "check": "Item standard errors (complete-data)",
+      "max_abs_difference": 1.2138882881929103e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "A: N = 500, J = 20, complete",
+      "method": "MML-EM vs TAM::tam.mml",
+      "check": "Ability variance",
+      "max_abs_difference": 1.4155906780111138e-07,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "A: N = 500, J = 20, complete",
+      "method": "MML-EM vs TAM::tam.mml",
+      "check": "Marginal log-likelihood per person (TAM convention)",
+      "max_abs_difference": 1.8523312974139118e-08,
+      "tolerance": 1e-05,
+      "status": "Pass"
+    },
+    {
+      "dataset": "A: N = 500, J = 20, complete",
+      "method": "WLE vs TAM::tam.wle",
+      "check": "WLE abilities",
+      "max_abs_difference": 1.9080028219597978e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "A: N = 500, J = 20, complete",
+      "method": "WLE vs TAM::tam.wle",
+      "check": "WLE standard errors",
+      "max_abs_difference": 1.29766213835536e-05,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "B: N = 500, J = 20, 10 % missing",
+      "method": "JMLE vs TAM::tam.jml",
+      "check": "Item difficulties b",
+      "max_abs_difference": 3.923073589540138e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "B: N = 500, J = 20, 10 % missing",
+      "method": "JMLE vs TAM::tam.jml",
+      "check": "Item standard errors",
+      "max_abs_difference": 7.394260769233441e-07,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "B: N = 500, J = 20, 10 % missing",
+      "method": "JMLE vs TAM::tam.jml",
+      "check": "Person abilities",
+      "max_abs_difference": 1.0467675129355314e-05,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "B: N = 500, J = 20, 10 % missing",
+      "method": "CMLE vs eRm::RM",
+      "check": "Item difficulties b",
+      "max_abs_difference": 2.0301026359303975e-05,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "B: N = 500, J = 20, 10 % missing",
+      "method": "CMLE vs eRm::RM",
+      "check": "Item standard errors",
+      "max_abs_difference": 1.281721124105073e-05,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "B: N = 500, J = 20, 10 % missing",
+      "method": "CMLE vs eRm::RM",
+      "check": "Conditional log-likelihood per person",
+      "max_abs_difference": 1.4357192412717269e-10,
+      "tolerance": 1e-05,
+      "status": "Pass"
+    },
+    {
+      "dataset": "B: N = 500, J = 20, 10 % missing",
+      "method": "MML-EM vs TAM::tam.mml",
+      "check": "Item difficulties b",
+      "max_abs_difference": 3.740977853494698e-05,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "B: N = 500, J = 20, 10 % missing",
+      "method": "MML-EM vs TAM::tam.mml",
+      "check": "Item standard errors (complete-data)",
+      "max_abs_difference": 8.535610651616565e-08,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "B: N = 500, J = 20, 10 % missing",
+      "method": "MML-EM vs TAM::tam.mml",
+      "check": "Ability variance",
+      "max_abs_difference": 9.440410298666713e-05,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "B: N = 500, J = 20, 10 % missing",
+      "method": "MML-EM vs TAM::tam.mml",
+      "check": "Marginal log-likelihood per person (TAM convention)",
+      "max_abs_difference": 4.697903932537884e-11,
+      "tolerance": 1e-05,
+      "status": "Pass"
+    },
+    {
+      "dataset": "B: N = 500, J = 20, 10 % missing",
+      "method": "WLE vs TAM::tam.wle",
+      "check": "WLE abilities",
+      "max_abs_difference": 4.355587586601928e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "B: N = 500, J = 20, 10 % missing",
+      "method": "WLE vs TAM::tam.wle",
+      "check": "WLE standard errors",
+      "max_abs_difference": 2.5790752511190007e-05,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "C: N = 300, J = 8, ability SD 2",
+      "method": "JMLE vs TAM::tam.jml",
+      "check": "Item difficulties b",
+      "max_abs_difference": 1.0587683086038524e-05,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "C: N = 300, J = 8, ability SD 2",
+      "method": "JMLE vs TAM::tam.jml",
+      "check": "Item standard errors",
+      "max_abs_difference": 1.1265248157088514e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "C: N = 300, J = 8, ability SD 2",
+      "method": "JMLE vs TAM::tam.jml",
+      "check": "Person abilities",
+      "max_abs_difference": 2.0807509048204054e-05,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "C: N = 300, J = 8, ability SD 2",
+      "method": "CMLE vs eRm::RM",
+      "check": "Item difficulties b",
+      "max_abs_difference": 7.250440323680607e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "C: N = 300, J = 8, ability SD 2",
+      "method": "CMLE vs eRm::RM",
+      "check": "Item standard errors",
+      "max_abs_difference": 5.7008347232601064e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "C: N = 300, J = 8, ability SD 2",
+      "method": "CMLE vs eRm::RM",
+      "check": "Conditional log-likelihood per person",
+      "max_abs_difference": 4.0415670810034495e-12,
+      "tolerance": 1e-05,
+      "status": "Pass"
+    },
+    {
+      "dataset": "C: N = 300, J = 8, ability SD 2",
+      "method": "MML-EM vs TAM::tam.mml",
+      "check": "Item difficulties b",
+      "max_abs_difference": 4.120663099627109e-07,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "C: N = 300, J = 8, ability SD 2",
+      "method": "MML-EM vs TAM::tam.mml",
+      "check": "Item standard errors (complete-data)",
+      "max_abs_difference": 4.2546786979680284e-07,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "C: N = 300, J = 8, ability SD 2",
+      "method": "MML-EM vs TAM::tam.mml",
+      "check": "Ability variance",
+      "max_abs_difference": 6.011412141404548e-07,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "C: N = 300, J = 8, ability SD 2",
+      "method": "MML-EM vs TAM::tam.mml",
+      "check": "Marginal log-likelihood per person (TAM convention)",
+      "max_abs_difference": 8.258928877088087e-09,
+      "tolerance": 1e-05,
+      "status": "Pass"
+    },
+    {
+      "dataset": "C: N = 300, J = 8, ability SD 2",
+      "method": "WLE vs TAM::tam.wle",
+      "check": "WLE abilities",
+      "max_abs_difference": 4.813874954656683e-06,
+      "tolerance": 0.001,
+      "status": "Pass"
+    },
+    {
+      "dataset": "C: N = 300, J = 8, ability SD 2",
+      "method": "WLE vs TAM::tam.wle",
+      "check": "WLE standard errors",
+      "max_abs_difference": 1.6347561778706776e-05,
+      "tolerance": 0.001,
+      "status": "Pass"
+    }
+  ]
+}
