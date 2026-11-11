@@ -64,6 +64,11 @@ BLUEPRINT = {
     "Care across the life course": ["Child and adolescent health", "Adult health", "Older adult care"],
     "Professional and patient-centered practice": ["Shared decisions", "Communication", "Clinical recommendation appraisal"],
 }
+OPTION_TYPES = ["", "Diagnosis", "Investigation", "Management", "Disposition", "Follow-up action", "Appraisal judgment", "Other"]
+STAGE_PRESETS = {
+    3: ["Assessment", "Management", "Follow-up"],
+    4: ["Initial assessment", "Interpretation", "Management", "Follow-up"],
+}
 REVIEW_STAGES = ["Model development review", "Independent model review", "Item/case review", "Pilot preparation and field testing", "Release decision"]
 REVIEW_STATUSES = ["Draft", "Model review", "Item/case review", "Ready for pilot", "Field-tested", "Approved for use"]
 SCORING_DESCRIPTIONS = {
@@ -83,7 +88,7 @@ def timestamp():
 def new_option(text="", correct=False, rationale="", misconception=""):
     return {"id": uid("opt"), "text": text, "correct": correct, "rationale": rationale,
             "misconception": misconception, "misconception_status": "author hypothesis",
-            "role": "conditional", "eligible": True, "conditions": [], "supports": "", "excludes": ""}
+            "role": "conditional", "eligible": True, "conditions": [], "supports": "", "excludes": "", "option_type": ""}
 
 
 def new_stage(index=1):
@@ -93,7 +98,7 @@ def new_stage(index=1):
 def new_item(stage_id):
     return {"id": uid("item"), "stage_id": stage_id, "title": "New clinical decision", "phase": REASONING_PHASES[0],
             "secondary_phases": [], "format": "SBA", "stem": "", "lead_in": "", "options": [new_option() for _ in range(4)],
-            "scoring": "exact", "select_count": None, "selection_instruction": "Select the single best answer.",
+            "scoring": "exact", "select_count": None, "option_count": None, "selection_instruction": "Select the single best answer.",
             "recommendation": "", "dimension": APPRAISAL_DIMENSIONS[0], "claims": [], "ratings": {},
             "required_facts": [], "sources": [], "review_status": "Draft", "provenance": "human-authored"}
 
@@ -147,7 +152,9 @@ def _example(case):
         stage["title"] = title
         if i:
             stage["new_information"] = "The case continues as explicitly described. No unstated treatment or examination result is assumed."
-            stage["transition"] = "The next item assesses a different decision using the information now shown."
+        if i < len(chosen) - 1:
+            # A transition leads out of its stage, so the final stage has none.
+            stage["transition"] = "The next item assesses a different decision using the information then shown."
         item.update(title=title, phase=phase, lead_in=lead,
                     options=[new_option(*option) for option in options], sources=[case["sources"][0]["url"]])
         if title == "Follow-up":
@@ -221,6 +228,145 @@ def resize_stages(case, n):
         while len(case["stages"]) < n:
             case["stages"].append(archive.pop(0) if archive else new_stage(len(case["stages"]) + 1))
     return touch_case(case, "Disclosure stages changed; dependent items and facts need review")
+
+
+def apply_stage_preset(case, n):
+    """Resize to an editable 3- or 4-stage scaffold; only default titles are renamed."""
+    if n not in STAGE_PRESETS:
+        raise ValueError("Stage presets are available for 3 or 4 stages")
+    resize_stages(case, n)
+    for index, (stage, title) in enumerate(zip(case["stages"], STAGE_PRESETS[n]), 1):
+        if not stage.get("title", "").strip() or re.fullmatch(r"Stage \d+", stage["title"].strip()):
+            stage["title"] = title
+    return touch_case(case, f"Applied the {n}-stage preset; existing content was kept")
+
+
+def duplicate_stage(case, stage_id):
+    """Insert a copy of a stage after it. Items are not copied or moved."""
+    index = next((i for i, s in enumerate(case["stages"]) if s["id"] == stage_id), None)
+    if index is None:
+        raise ValueError("The stage to duplicate does not exist")
+    copy = deepcopy(case["stages"][index])
+    copy["id"] = uid("stage")
+    copy["title"] = (copy.get("title") or "Stage") + " · copy"
+    case["stages"].insert(index + 1, copy)
+    return touch_case(case, "Duplicated a disclosure stage")
+
+
+def remove_stage(case, stage_id):
+    """Archive one stage. Dependent items and facts keep their reference for explicit repair."""
+    if len(case["stages"]) <= 1:
+        raise ValueError("A case needs at least one disclosure stage")
+    index = next((i for i, s in enumerate(case["stages"]) if s["id"] == stage_id), None)
+    if index is None:
+        raise ValueError("The stage to remove does not exist")
+    case.setdefault("archived_stages", []).insert(0, case["stages"].pop(index))
+    return touch_case(case, "Removed a disclosure stage; dependent items and facts need review")
+
+
+def scoring_patterns(item):
+    """Score representative response patterns so the author can inspect the policy."""
+    options = item.get("options", [])
+    keyed = [o["id"] for o in options if o.get("correct")]
+    unkeyed = [o["id"] for o in options if not o.get("correct")]
+    patterns = [("No options selected", [])]
+    if item.get("format", "SBA") == "SBA":
+        patterns += [("Keyed option", keyed[:1])] + ([("An unkeyed option", unkeyed[:1])] if unkeyed else [])
+    else:
+        patterns.append(("Exact keyed set", keyed))
+        if len(keyed) > 1:
+            patterns.append(("One keyed option only", keyed[:1]))
+        if unkeyed:
+            patterns.append(("Keyed set plus one unkeyed option", keyed + unkeyed[:1]))
+            patterns.append(("One unkeyed option only", unkeyed[:1]))
+        patterns.append(("All options selected", keyed + unkeyed))
+    rows = []
+    for label, selected in patterns:
+        result = score_item(item, selected)
+        rows.append({"Response pattern": label, "Keyed selected": result["correct_selected"],
+                     "Unkeyed selected": result["incorrect_selected"], "Keyed missed": result["missed"],
+                     "Score": result["score"]})
+    return rows
+
+
+def evidence_map(case):
+    """Rows tracing visible information to the decision, key, anticipated errors and next event."""
+    stages = case.get("stages", [])
+    order = {s["id"]: i for i, s in enumerate(stages)}
+    rows = []
+    for number, item in enumerate(case.get("items", []), 1):
+        index = order.get(item.get("stage_id"))
+        stage = stages[index] if index is not None else None
+        facts = visible_facts(case, item.get("stage_id")) if stage else []
+        disclosed = [s.get("new_information", "").strip() for s in stages[:index + 1]] if stage else []
+        visible = ["Shared vignette"] if case.get("patient", "").strip() else []
+        visible += [f"{f.get('name', '')}: {f.get('value', '')}" for f in facts]
+        visible += [text for text in disclosed if text]
+        if stage is None:
+            following = "Stage missing — reassign this item"
+        elif stage.get("transition", "").strip():
+            following = stage["transition"].strip()
+        elif index + 1 < len(stages):
+            following = stages[index + 1].get("new_information", "").strip() or "No transition or new information recorded"
+        else:
+            following = "End of case"
+        errors = sorted({o["misconception"] for o in item.get("options", []) if not o.get("correct") and o.get("misconception")})
+        phases = [item.get("phase", "")] + [p for p in item.get("secondary_phases", []) if p != item.get("phase")]
+        rows.append({
+            "Item": f"{number}. {item.get('title', '')}",
+            "Stage": stage["title"] if stage else "Missing stage",
+            "Visible information": " | ".join(visible) or "Nothing recorded",
+            "Reasoning phase(s)": " + ".join(p for p in phases if p),
+            "Expected judgment": item.get("lead_in", ""),
+            "Format": item.get("format", "SBA"),
+            "Keyed response(s)": " | ".join(o.get("text", "") for o in item.get("options", []) if o.get("correct")) or "No key",
+            "Anticipated reasoning errors": "; ".join(errors) or "None recorded",
+            "What happens next": following,
+        })
+    return rows
+
+
+def combination_table(case, limit=200):
+    """Enumerate authored feature combinations and whether the constraints permit them."""
+    features = [f for f in case.get("features", []) if f.get("name") and f.get("values")]
+    if not features:
+        return {"rows": [], "total": 0, "permitted": 0, "truncated": False}
+    total = math.prod(len(f["values"]) for f in features)
+    if total > 50000:
+        raise ValueError("Feature space exceeds 50,000 combinations; narrow authored ranges")
+    rows, permitted = [], 0
+    for combination in product(*(f["values"] for f in features)):
+        assignment = {"scenario": case.get("scenario", "")}
+        for feature, value in zip(features, combination):
+            assignment[feature["name"]] = value
+            assignment[feature.get("id", feature["name"])] = value
+        allowed = all(evaluate_rule(rule, assignment) for rule in case.get("constraints", []))
+        permitted += allowed
+        if len(rows) < limit:
+            rows.append({f["name"]: str(v) for f, v in zip(features, combination)} | {"Permitted": "Yes" if allowed else "No"})
+    return {"rows": rows, "total": total, "permitted": permitted, "truncated": total > limit}
+
+
+def split_import(payload):
+    """Return the case payloads in a single-case, variant-set, or library export."""
+    if isinstance(payload, (str, bytes)):
+        try:
+            payload = json.loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError("Import is not valid UTF-8 JSON") from exc
+    if isinstance(payload, list):
+        cases = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("cases"), list):
+        cases = payload["cases"]
+    elif isinstance(payload, dict) and isinstance(payload.get("cases"), dict):
+        cases = list(payload["cases"].values())
+    else:
+        cases = [payload]
+    if not cases:
+        raise ValueError("The import contains no cases")
+    if len(cases) > 200:
+        raise ValueError("The import contains more than 200 cases; split it into smaller files")
+    return cases
 
 
 def score_item(item, selected_ids):
@@ -320,6 +466,8 @@ def validate_case(case):
             add("error", "MS_KEY", path + ".options", "Multiple-selection requires a complete nonempty keyed option set.")
         if item["format"] == "MS" and item.get("select_count") is not None and item["select_count"] != len(keyed):
             add("error", "SELECT_COUNT", path + ".select_count", "The instructed selection count does not match the keyed option set.")
+        if item["format"] == "MS" and keyed and len(keyed) == len(opts):
+            add("warning", "MS_ALL_KEYED", path + ".options", "Every option is keyed; add a defensible unkeyed alternative or reconsider the task.")
         if item["format"] == "MS" and not item.get("selection_instruction", "").strip():
             add("warning", "SELECTION_INSTRUCTION", path + ".selection_instruction", "State whether all applicable options or a specified number must be selected.")
         for oidx, option in enumerate(opts):
@@ -356,6 +504,7 @@ def validate_case(case):
                     add("review", "CLAIM_EVIDENCE", f"{path}.claims[{cidx}]", "Supply evidence and rationale; insufficient information must not be silently treated as false.")
     if len(set(all_option_ids)) != len(all_option_ids):
         add("error", "DUPLICATE_ID", "items.options", "Option identifiers must be unique throughout a case.")
+    _cross_item_findings(case, add)
     for idx, stage in enumerate(case["stages"]):
         if idx and not stage.get("new_information", "").strip() and not stage.get("transition", "").strip():
             add("review", "TRANSITION", f"stages[{idx}]", "Explain the next decision's purpose or new information; another item does not require a new event.")
@@ -369,6 +518,62 @@ def validate_case(case):
     if case["mode"] == "unfolding":
         add("review", "SEQUENCE_REVIEW", "stages", "Review chronology, treatment exposure, answer cueing, and whether the learner should update judgments. These require SME judgment.")
     return findings
+
+
+_PLACEHOLDER = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+
+
+def _norm_text(text):
+    return re.sub(r"\s+", " ", str(text)).strip().casefold()
+
+
+def _cross_item_findings(case, add):
+    """Deterministic prompts about cueing, repetition and placeholders; SME judgment decides."""
+    order = {s["id"]: i for i, s in enumerate(case["stages"])}
+    items = case["items"]
+    seen = {}
+    for idx, item in enumerate(items):
+        for option in item["options"]:
+            text = _norm_text(option["text"])
+            if text:
+                seen.setdefault(text, set()).add(idx)
+    for text, where in seen.items():
+        if len(where) > 1:
+            first = min(where)
+            numbers = ", ".join(str(i + 1) for i in sorted(where))
+            add("review", "REPEATED_OPTION", f"items[{first}].options", f"The same option text appears in items {numbers}. Check for cueing and whether its role should change with the evidence.")
+    leads = {}
+    for idx, item in enumerate(items):
+        lead = _norm_text(item["lead_in"])
+        if lead:
+            leads.setdefault((item["stage_id"], lead), []).append(idx)
+    for (_, _lead), where in leads.items():
+        if len(where) > 1:
+            add("review", "REPEATED_DECISION", f"items[{where[1]}].lead_in", f"Items {', '.join(str(i + 1) for i in where)} ask the same question from the same disclosed evidence. Give each item a distinct decision.")
+    for aidx, source in enumerate(items):
+        keys = [_norm_text(o["text"]) for o in source["options"] if o["correct"] and len(_norm_text(o["text"])) >= 12]
+        if not keys or source["stage_id"] not in order:
+            continue
+        for bidx, other in enumerate(items):
+            if bidx == aidx or order.get(other["stage_id"], -1) < order[source["stage_id"]]:
+                continue
+            visible = _norm_text(other["stem"] + " " + other["lead_in"])
+            if any(key in visible for key in keys):
+                add("review", "ANSWER_CUE", f"items[{bidx}].stem", f"Item {bidx + 1} wording contains the keyed answer to item {aidx + 1}. Confirm this disclosure is deliberate and cannot be seen before item {aidx + 1} is answered.")
+    names = {f.get("name") for f in case["features"]}
+    def scan(path, text):
+        for name in sorted(set(_PLACEHOLDER.findall(text or ""))):
+            if name not in names:
+                add("warning", "PLACEHOLDER", path, f"Placeholder {{{{{name}}}}} does not match an authored feature name and will appear unreplaced.")
+    scan("patient", case["patient"])
+    for sidx, stage in enumerate(case["stages"]):
+        scan(f"stages[{sidx}].new_information", stage.get("new_information", ""))
+        scan(f"stages[{sidx}].transition", stage.get("transition", ""))
+    for idx, item in enumerate(items):
+        scan(f"items[{idx}].stem", item["stem"])
+        scan(f"items[{idx}].lead_in", item["lead_in"])
+        for oidx, option in enumerate(item["options"]):
+            scan(f"items[{idx}].options[{oidx}].text", option["text"])
 
 
 def _ensure(value, expected, path):
@@ -435,6 +640,10 @@ def normalize_import(payload):
                 _ensure(item["select_count"], int, f"{path}.select_count")
                 if item["select_count"] < 1:
                     raise ValueError(f"{path}.select_count: must be positive or null")
+            if item.get("option_count") is not None:
+                _ensure(item["option_count"], int, f"{path}.option_count")
+                if item["option_count"] < 2:
+                    raise ValueError(f"{path}.option_count: must be at least 2 or null")
             for field in ("options", "claims", "required_facts", "sources", "secondary_phases"):
                 _ensure(item[field], list, f"{path}.{field}")
             for field in ("required_facts", "secondary_phases"):
@@ -454,7 +663,7 @@ def normalize_import(payload):
                 _ensure(option, dict, opath)
                 for field, default in new_option().items():
                     option.setdefault(field, deepcopy(default))
-                for field in ("id", "text", "rationale", "misconception", "role", "supports", "excludes"):
+                for field in ("id", "text", "rationale", "misconception", "role", "supports", "excludes", "option_type"):
                     _ensure(option[field], str, f"{opath}.{field}")
                 _ensure(option["correct"], bool, f"{opath}.correct")
                 _ensure(option["eligible"], bool, f"{opath}.eligible")
@@ -603,21 +812,26 @@ def generate_variants(case, count=1, seed=1):
             continue
         rendered = _render(deepcopy(case), assignment)
         invalid_options = False
+        reasons = []
         for original, item in zip(case["items"], rendered["items"]):
             eligible = []
             for original_option, option in zip(original["options"], item["options"]):
-                allowed = original_option.get("eligible", True) and evaluate_rule(original_option.get("conditions", []), assignment)
+                marked = original_option.get("eligible", True)
+                allowed = marked and evaluate_rule(original_option.get("conditions", []), assignment)
                 if original_option.get("correct") and not allowed:
                     invalid_options = True
                     break
                 if allowed:
                     eligible.append(option)
+                else:
+                    reasons.append({"item": item["title"], "option": option["text"], "included": False,
+                                    "reason": "Marked ineligible by the author" if not marked else "Eligibility conditions not met for this feature assignment"})
             if invalid_options:
                 break
             if len(eligible) < 2 or not any(o["correct"] for o in eligible):
                 invalid_options = True
                 break
-            required = item.get("option_count", len(original["options"]))
+            required = item.get("option_count") or len(original["options"])
             essential = [o for o in eligible if o["correct"] or o.get("role") == "essential"]
             conditional = [o for o in eligible if not o["correct"] and o.get("role") == "conditional"]
             pool = [o for o in eligible if not o["correct"] and o.get("role") not in {"essential", "conditional"}]
@@ -625,7 +839,21 @@ def generate_variants(case, count=1, seed=1):
             if required < len(selected) or len(eligible) < required:
                 invalid_options = True
                 break
-            selected += rng.sample(pool, required - len(selected))
+            sampled = rng.sample(pool, required - len(selected))
+            selected += sampled
+            chosen = {o["id"] for o in selected}
+            for option in eligible:
+                if option["correct"]:
+                    why = "Keyed response; always included"
+                elif option.get("role") == "essential":
+                    why = "Essential contrast; always included when eligible"
+                elif option.get("role") == "conditional":
+                    why = "Conditional alternative; eligibility conditions met"
+                elif option["id"] in chosen:
+                    why = "Sampled from the eligible random pool"
+                else:
+                    why = "Eligible, but not drawn from the random pool"
+                reasons.append({"item": item["title"], "option": option["text"], "included": option["id"] in chosen, "reason": why})
             item["options"] = selected
             if item["format"] == "SBA" and sum(o["correct"] for o in selected) != 1:
                 invalid_options = True
@@ -643,7 +871,8 @@ def generate_variants(case, count=1, seed=1):
         rendered["id"] = uid("case")
         rendered["title"] = f"{case['title']} · variant {len(variants) + 1}"
         rendered["generated_from"] = {"case_id": case["id"], "version": case["version"], "seed": seed,
-                                      "assignment": {f["name"]: assignment[f["name"]] for f in features}}
+                                      "assignment": {f["name"]: assignment[f["name"]] for f in features},
+                                      "generator": "deterministic assembly (no AI model)", "option_reasons": reasons}
         rendered["reviews"] = []
         rendered["review_status"] = "Draft"
         rendered["provenance"] = "deterministic assembly from authored elements"

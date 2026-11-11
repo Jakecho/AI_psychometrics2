@@ -59,6 +59,20 @@ A cloud server cannot reach an Ollama service running only on your personal comp
 5. Run structural validation and inspect issues. An incomplete draft may still be saved for later work; a passing structural check is not clinical approval.
 6. Preview the learner experience, save the case, and export it for expert review. Retain case identifiers when analyzing items that share a vignette.
 
+Each draft has five working tabs:
+
+| Tab | Use it to |
+| --- | --- |
+| Write | Edit the vignette, blueprint, stages, items, response format, scoring, and every option with its rationale, type, proposed reasoning error, and selection role. Stage tools add, duplicate, remove, and reorder stages; 3- and 4-stage presets are editable scaffolds. A scoring preview shows how representative response patterns are scored. |
+| Case map | See stages with their nested items and open findings, the evidence-to-decision map for each item, the blueprint trace, and reasoning-phase coverage. |
+| Cognitive model | Record facts and when they are disclosed, feature values, constraint rules, and sources. A constraint matrix lists which authored combinations are permitted. Assemble variants, read why each option was included or excluded, and add the variants to the library. |
+| Validate & review | Read structural errors, missing input, and expert-review prompts separately, then record named review decisions. Prompts include repeated options across items, later wording that reveals an earlier key, duplicate questions in one stage, and unmatched `{{placeholders}}`. |
+| Learner preview | Answer the items as a learner would. Unfolding cases reveal one stage at a time and lock earlier answers. |
+
+The Library dashboard above the tabs lists every draft with its type, review state, and open findings. **Archive** removes a draft from the working library; restore it from the dashboard. The sidebar imports a single case, a downloaded variant set, or a library backup, and nothing is imported if any case in the file is invalid.
+
+Undo, redo, local commands, applied AI proposals, and dictation rebuild the form from the saved case, so open sections collapse to their defaults after those actions. The selected item and tab are kept.
+
 Multiple-selection items require an explicit scoring policy and complete keyed set. Review option-level response patterns as well as the total; a total alone can conceal an important safety-related error.
 
 ## Manual mode and optional AI
@@ -116,14 +130,17 @@ Educational examples and generated variants are drafts. The app does not establi
 
 | File | Role |
 | --- | --- |
-| `app.py` | Streamlit authoring interface |
+| `app.py` | Streamlit entry point: library, dashboard, import/export, undo/redo, mode tabs |
+| `ui_editor.py` | Manual authoring tabs: write, case map, cognitive model, review, learner preview |
+| `ui_assistant.py` | Guidance panel, local typed commands, and optional AI proposals |
+| `storage.py` | Atomic local library, revision history, archive, and session-only hosted storage |
 | `cloud_entry.py` | Community Cloud entrypoint with allowlisted settings and session-only draft storage |
 | `core.py` | Clinical case/item structures, constraints, scoring, validation, and export logic |
 | `ai_adapter.py` | Optional guarded AI and recorded-voice transcription requests |
 | `MASTER_PROMPT.md` | Complete product brief and acceptance criteria |
 | `run.command` | Local launcher |
 | `.streamlit/config.toml` | Local address, port, and theme |
-| `test_core.py`, `test_ai_adapter.py`, `test_app.py` | Focused domain, adapter, persistence, and simulated interface checks |
+| `test_core.py`, `test_ai_adapter.py`, `test_app.py`, `test_cloud_entry.py`, `test_ui_editor.py`, `test_ui_assistant.py`, `test_workflows.py` | Domain, adapter, persistence, hosted-entry, and simulated interface checks |
 
 Local runtime data and secrets are excluded by `.gitignore`. Use the app's export controls to retain portable copies of authored material. Review [MASTER_PROMPT.md](MASTER_PROMPT.md) for the distinction between the original Shiny example, published methods, and proposed extensions.
 
@@ -132,10 +149,12 @@ Local `app.py` saves its library to `data/library.json` using atomic replacement
 For an isolated local test or alternate local data folder, set `ITEMDEV_DATA_DIR` to a directory of your choice. Run the focused checks from this folder with the same Python environment as the app:
 
 ```bash
-../.venv/bin/python -m unittest test_core test_ai_adapter test_app -v
+../.venv/bin/python -m unittest test_core test_ai_adapter test_app test_cloud_entry test_ui_editor test_ui_assistant test_workflows
 ```
 
-The interface checks use Streamlit AppTest, a simulated runtime. They do not establish browser layout quality, live microphone behavior, clinical correctness, or live AI service performance.
+The interface checks use Streamlit AppTest, a simulated runtime. It cannot show whether a browser field refreshes after the saved case changes, so undo, local commands, applied proposals, item counts, table saves, import, variant assembly, and archive/restore were also exercised once in desktop Chrome against a stand-in AI server. Neither kind of check establishes live microphone behavior, clinical correctness, or live AI service performance.
+
+Not yet built from [MASTER_PROMPT.md](MASTER_PROMPT.md): hands-free or streaming voice (recorded messages only), import and analysis of learner response data, response-dependent branching, a graphical model diagram, an editable framework crosswalk, and conversational commands beyond the exact local vocabulary.
 
 No hosting, publication, Git commit, or upload is performed by the launcher.
 

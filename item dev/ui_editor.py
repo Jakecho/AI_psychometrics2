@@ -10,11 +10,43 @@ import streamlit as st
 
 from core import (
     APPRAISAL_DIMENSIONS, APPRAISAL_GUIDANCE, BLUEPRINT, FRAMEWORK_CROSSWALK,
-    MISCONCEPTIONS, REASONING_GUIDANCE, REASONING_PHASES, REVIEW_STAGES,
-    REVIEW_STATUSES, SCORING_DESCRIPTIONS, export_markdown, generate_variants,
-    new_item, new_option, resize_items, resize_stages, score_item, timestamp,
-    uid, validate_case, visible_facts, normalize_import,
+    MISCONCEPTIONS, OPTION_TYPES, REASONING_GUIDANCE, REASONING_PHASES, REVIEW_STAGES,
+    REVIEW_STATUSES, SCORING_DESCRIPTIONS, STAGE_PRESETS, apply_stage_preset,
+    combination_table, duplicate_stage, evidence_map, export_markdown, generate_variants,
+    new_item, new_option, remove_stage, resize_items, resize_stages, score_item,
+    scoring_patterns, timestamp, uid, validate_case, visible_facts, normalize_import,
 )
+
+
+def widget_prefix(case_id):
+    """Key prefix for content widgets of one case.
+
+    Streamlit identifies a keyed widget by its key, so a browser keeps showing
+    its own value when the saved case changes underneath it (undo, a local
+    command, an applied proposal). Bumping the generation gives every content
+    widget a new identity so it is rebuilt from the saved case.
+    """
+    generation = st.session_state.get("itemdev_widget_generation", {}).get(case_id, 0)
+    return f"{case_id}::" + (f"r{generation}::" if generation else "")
+
+
+def refresh_widgets(case_id):
+    """Rebuild this case's content widgets from saved data on the next run."""
+    generations = st.session_state.setdefault("itemdev_widget_generation", {})
+    generations[case_id] = generations.get(case_id, 0) + 1
+    keep = {case_id + "::selected_item_id", case_id + "::editor_tab"}
+    for key in list(st.session_state):
+        if isinstance(key, str) and key.startswith(case_id + "::") and key not in keep and not key.startswith(case_id + "::ai:"):
+            del st.session_state[key]
+
+
+def _table_key(prefix, name):
+    return f"{prefix}{name}::{st.session_state.get(prefix + name + '_rev', 0)}"
+
+
+def _table_saved(prefix, name):
+    # A saved table is rebuilt from the case so pending row edits are not replayed.
+    st.session_state[prefix + name + "_rev"] = st.session_state.get(prefix + name + "_rev", 0) + 1
 
 
 def _choice(label, values, current, key, **kwargs):
@@ -41,7 +73,6 @@ def _load_json(text, expected, label):
 
 def _mutation(case, commit, reason):
     commit(case, reason)
-    st.session_state[case["id"] + "::refresh_counts"] = True
     st.rerun()
 
 
@@ -99,8 +130,13 @@ def _metadata(case, prefix):
 def _structure(case, commit, prefix):
     with st.expander("Items and disclosure stages", expanded=case["mode"] == "unfolding"):
         a, b, c, d = st.columns([1, 1, 1, 1])
-        nitems = a.number_input("Items in this case", min_value=1, value=max(1, len(case["items"])), step=1, key=prefix + "count_items")
-        nstages = b.number_input("Disclosure stages", min_value=1, value=max(1, len(case["stages"])), step=1, key=prefix + "count_stages")
+        counts = (max(1, len(case["items"])), max(1, len(case["stages"])))
+        if st.session_state.get(prefix + "seen_counts") != counts:
+            # The saved counts changed (here, by a command, or by undo): show them.
+            st.session_state[prefix + "seen_counts"] = counts
+            st.session_state[prefix + "count_items"], st.session_state[prefix + "count_stages"] = counts
+        nitems = a.number_input("Items in this case", min_value=1, step=1, key=prefix + "count_items")
+        nstages = b.number_input("Disclosure stages", min_value=1, step=1, key=prefix + "count_stages")
         if c.button("Apply counts", key=prefix + "apply_counts", width="stretch"):
             resize_items(case, int(nitems))
             resize_stages(case, int(nstages))
@@ -108,12 +144,19 @@ def _structure(case, commit, prefix):
         if d.button("Add one item", key=prefix + "add_item", width="stretch"):
             case["items"].append(new_item(case["stages"][0]["id"]))
             _mutation(case, commit, "Add item")
+        presets = st.columns([1, 1, 2])
+        for column, size in zip(presets, sorted(STAGE_PRESETS)):
+            if column.button(f"{size}-stage preset", key=prefix + f"preset_{size}", width="stretch", help="Sets the stage count and names untitled stages: " + " → ".join(STAGE_PRESETS[size]) + ". A starting scaffold only; items and written stage content are kept."):
+                apply_stage_preset(case, size)
+                _mutation(case, commit, f"Apply {size}-stage preset")
         st.caption("Item count, stage count, reasoning phases, and variant count are independent. Removed content is kept in recoverable history. Removing a stage preserves references and flags them for explicit reassignment.")
         if case.get("archived_items") or case.get("archived_stages"):
             st.caption(f"Recoverable: {len(case.get('archived_items', []))} item(s), {len(case.get('archived_stages', []))} stage(s). Increase the corresponding count to restore them.")
         stage_ids = [s["id"] for s in case["stages"]]
         stages = {s["id"]: s for s in case["stages"]}
-        sid = st.selectbox("Edit disclosure stage", stage_ids, format_func=lambda x: stages[x]["title"], key=prefix + "stage_picker")
+        if st.session_state.get(prefix + "stage_picker") not in stage_ids:
+            st.session_state.pop(prefix + "stage_picker", None)
+        sid = st.selectbox("Edit disclosure stage", stage_ids, format_func=lambda x: f"{stage_ids.index(x) + 1}. {stages[x]['title']}", key=prefix + "stage_picker")
         stage = stages[sid]
         sp = prefix + sid + "::"
         stage["title"] = st.text_input("Stage title", stage["title"], key=sp + "title")
@@ -121,14 +164,25 @@ def _structure(case, commit, prefix):
         stage["transition"] = st.text_area("Transition and purpose of the next decision", stage.get("transition", ""), height=75, key=sp + "transition", help="State what actually happened. Do not silently assume a correct answer to an earlier item.")
         stage["elapsed"] = st.text_input("Time elapsed / sequence note", stage.get("elapsed", ""), key=sp + "elapsed")
         st.caption("Stage order: " + " → ".join(s["title"] for s in case["stages"]))
-        a, b = st.columns(2)
+        here = [i["title"] for i in case["items"] if i["stage_id"] == sid]
+        st.caption(f"Items using this stage ({len(here)}): " + ("; ".join(here) if here else "none yet — assign one with ‘Information available at this stage’ below."))
+        a, b, c, d, e = st.columns(5)
         index = stage_ids.index(sid)
-        if a.button("Move stage earlier", disabled=index == 0, key=sp + "up"):
+        if a.button("Move earlier", disabled=index == 0, key=sp + "up", width="stretch"):
             case["stages"][index - 1], case["stages"][index] = case["stages"][index], case["stages"][index - 1]
             _mutation(case, commit, "Reorder disclosure stages")
-        if b.button("Move stage later", disabled=index == len(stage_ids) - 1, key=sp + "down"):
+        if b.button("Move later", disabled=index == len(stage_ids) - 1, key=sp + "down", width="stretch"):
             case["stages"][index + 1], case["stages"][index] = case["stages"][index], case["stages"][index + 1]
             _mutation(case, commit, "Reorder disclosure stages")
+        if c.button("Add stage", key=sp + "add_stage", width="stretch"):
+            resize_stages(case, len(case["stages"]) + 1)
+            _mutation(case, commit, "Add disclosure stage")
+        if d.button("Duplicate stage", key=sp + "duplicate_stage", width="stretch", help="Copies the stage text. Items are not copied."):
+            duplicate_stage(case, sid)
+            _mutation(case, commit, "Duplicate disclosure stage")
+        if e.button("Remove stage", key=sp + "remove_stage", disabled=len(stage_ids) <= 1, width="stretch", help="The stage is kept in recoverable history. Items and facts that used it are flagged for reassignment, not deleted."):
+            remove_stage(case, sid)
+            _mutation(case, commit, "Remove disclosure stage")
 
 
 def _appraisal_fields(item, prefix, commit, case):
@@ -138,9 +192,10 @@ def _appraisal_fields(item, prefix, commit, case):
         fields = ["claim", "judgment", "evidence", "dimension", "rationale", "source"]
         rows = [{f: claim.get(f, "") for f in fields} for claim in item.get("claims", [])]
         with st.form(prefix + "claim_form"):
-            edited = st.data_editor(pd.DataFrame(rows, columns=fields), num_rows="dynamic", hide_index=True, width="stretch", key=prefix + "claims_table", column_config={"judgment": st.column_config.SelectboxColumn(options=["Supported", "Contradicted", "Insufficient information", "Not applicable"]), "dimension": st.column_config.SelectboxColumn(options=APPRAISAL_DIMENSIONS)})
+            edited = st.data_editor(pd.DataFrame(rows, columns=fields), num_rows="dynamic", hide_index=True, width="stretch", key=_table_key(prefix, "claims_table"), column_config={"judgment": st.column_config.SelectboxColumn(options=["Supported", "Contradicted", "Insufficient information", "Not applicable"]), "dimension": st.column_config.SelectboxColumn(options=APPRAISAL_DIMENSIONS)})
             if st.form_submit_button("Save claim annotations"):
-                item["claims"] = edited.fillna("").to_dict("records")
+                item["claims"] = [row for row in edited.fillna("").astype(str).to_dict("records") if any(v.strip() for v in row.values())]
+                _table_saved(prefix, "claims_table")
                 _mutation(case, commit, "Edit appraisal evidence annotations")
         st.caption("Insufficient information is not the same as false. These annotations are author review data, not the learner key.")
     with st.expander("Recommendation rubric ratings"):
@@ -156,8 +211,10 @@ def _appraisal_fields(item, prefix, commit, case):
             if value not in choices:
                 value = "Not rated"
             cols = st.columns([2, 3])
-            rating = _choice(dimension, choices, value, rp + "rating")
-            rationale = st.text_input(f"Rating rationale · {dimension}", previous.get("rationale", ""), key=rp + "rationale")
+            with cols[0]:
+                rating = _choice(dimension, choices, value, rp + "rating")
+            with cols[1]:
+                rationale = st.text_input(f"Rating rationale · {dimension}", previous.get("rationale", ""), key=rp + "rationale")
             if rating != "Not rated" or rationale:
                 ratings[dimension] = {"rating": None if rating == "Not rated" else int(rating), "rationale": rationale}
             else:
@@ -174,7 +231,9 @@ def _option_editor(case, item, commit, prefix):
             a, b, c = st.columns([1, 1, 1])
             option["correct"] = a.checkbox("Keyed response", value=option.get("correct", False), key=op + "correct", help="For SBA, exactly one option can be keyed. For MS, key every correct selection.")
             option["eligible"] = b.checkbox("Eligible for assembly", value=option.get("eligible", True), key=op + "eligible")
-            option["role"] = _choice("Selection role", ["essential", "conditional", "random"], option.get("role", "conditional"), op + "role")
+            with c:
+                option["option_type"] = _choice("Option type", OPTION_TYPES, option.get("option_type", ""), op + "option_type", format_func=lambda x: x or "Not specified")
+            option["role"] = _choice("Selection role for assembled variants", ["essential", "conditional", "random"], option.get("role", "conditional"), op + "role", help="Essential: always included when eligible. Conditional: included whenever its eligibility conditions are met. Random: sampled from the eligible pool to reach the option count. Keyed options are always included.")
             option["rationale"] = st.text_area("Why this option is keyed or unkeyed", option.get("rationale", ""), height=80, key=op + "rationale", help="Tie the explanation to information visible at this decision point.")
             option["misconception"] = _choice("Proposed reasoning error", [""] + list(MISCONCEPTIONS) + ["Unknown cause / other"], option.get("misconception", ""), op + "misconception")
             option["misconception_status"] = _choice("Evidence status of this proposed error", ["author hypothesis", "expert-supported", "empirically supported"], option.get("misconception_status", "author hypothesis"), op + "misconception_status")
@@ -192,9 +251,11 @@ def _option_editor(case, item, commit, prefix):
     if st.button("Add option", key=prefix + "add_option"):
         item["options"].append(new_option())
         _mutation(case, commit, "Add option")
+    shown = st.number_input("Options shown per assembled variant (0 = all authored options)", min_value=0, max_value=len(item["options"]), value=min(int(item.get("option_count") or 0), len(item["options"])), step=1, key=prefix + "option_count", help="Only used when assembling variants. A smaller number samples ‘random’ distractors after keyed, essential and conditional options are placed. A shortage is reported; nothing is padded.")
+    item["option_count"] = int(shown) if int(shown) >= 2 else None
 
 
-def _write(case, commit, prefix):
+def _write(case, commit, prefix, selection_key):
     _metadata(case, prefix)
     _structure(case, commit, prefix)
     if not case["items"]:
@@ -202,9 +263,9 @@ def _write(case, commit, prefix):
         return
     ids = [i["id"] for i in case["items"]]
     by_id = {i["id"]: i for i in case["items"]}
-    if st.session_state.get(prefix + "selected_item_id") not in ids:
-        st.session_state.pop(prefix + "selected_item_id", None)
-    selected = st.selectbox("Current item", ids, format_func=lambda x: f"{ids.index(x)+1}. {by_id[x]['title']}", key=prefix + "selected_item_id")
+    if st.session_state.get(selection_key) not in ids:
+        st.session_state.pop(selection_key, None)
+    selected = st.selectbox("Current item", ids, format_func=lambda x: f"{ids.index(x)+1}. {by_id[x]['title']}", key=selection_key)
     item = by_id[selected]
     ip = prefix + item["id"] + "::"
     a, b, c, d = st.columns(4)
@@ -233,6 +294,8 @@ def _write(case, commit, prefix):
         stage_map = {s["id"]: s["title"] for s in case["stages"]}
         item["stage_id"] = _choice("Information available at this stage", stage_map, item["stage_id"], ip + "stage", format_func=lambda x: stage_map.get(x, "Missing stage — reassign"))
         item["phase"] = _choice("Primary reasoning phase", REASONING_PHASES, item["phase"], ip + "phase")
+        others = [phase for phase in REASONING_PHASES if phase != item["phase"]]
+        item["secondary_phases"] = st.multiselect("Secondary reasoning phases (optional)", others, default=[x for x in item.get("secondary_phases", []) if x in others], key=ip + "secondary_phases", help="Phases can overlap and recur. Secondary tags do not create extra items or stages.")
         item["stem"] = st.text_area("Item-specific stem / additional context", item.get("stem", ""), height=95, key=ip + "stem", help="The shared vignette is automatically included in learner preview. Do not duplicate it here.")
         if case["mode"] == "appraisal":
             _appraisal_fields(item, ip, commit, case)
@@ -250,6 +313,13 @@ def _write(case, commit, prefix):
         else:
             item["scoring"] = "exact"
             item["select_count"] = None
+        if any(o.get("correct") for o in item["options"]):
+            with st.expander("Scoring preview · representative response patterns"):
+                try:
+                    st.dataframe(pd.DataFrame(scoring_patterns(item)), hide_index=True, width="stretch")
+                    st.caption("The total can hide which options were chosen. Review option-level patterns, especially for safety-related judgments.")
+                except ValueError as exc:
+                    st.info(f"Not scorable yet: {exc}.")
         fact_ids = [f["id"] for f in case.get("facts", [])]
         if fact_ids:
             fmap = {f["id"]: f.get("name", f["id"]) for f in case["facts"]}
@@ -260,33 +330,42 @@ def _write(case, commit, prefix):
         _guidance(case, item, ip)
 
 
-def _model(case, commit, prefix):
+def _model(case, commit, prefix, add_cases=None):
     st.markdown("### Cognitive model and information sources")
     st.caption("Blueprint → clinical task → relevant features → permitted values and constraints → item wording and options. Clinical rules are authored restrictions, not universal diagnostic truths.")
     case["scenario"] = st.text_input("Scenario / outcome being modeled", case.get("scenario", ""), key=prefix + "scenario")
     with st.expander("Shared facts and disclosure", expanded=True):
         cols = ["id", "name", "value", "disclosed_at", "source"]
-        rows = [{k: str(f.get(k, "")) for k in cols} for f in case.get("facts", [])]
-        stage_ids = ["shared"] + [s["id"] for s in case["stages"]]
-        st.caption("Disclosure stages: " + "; ".join(f"{s['id']}: {s['title']}" for s in case["stages"]))
+        # Show readable stage names in the table; store stable stage identifiers.
+        labels = {"shared": "Shared · from the start"}
+        for number, stage in enumerate(case["stages"], 1):
+            labels[stage["id"]] = f"Stage {number} · {stage['title']}"
+        def label_for(value):
+            return labels.get(value or "shared", f"Missing stage · {value}")
+        rows = [{k: str(f.get(k, "")) for k in cols} | {"disclosed_at": label_for(f.get("disclosed_at"))} for f in case.get("facts", [])]
+        back = {label: stage_id for stage_id, label in labels.items()} | {label_for(f.get("disclosed_at")): f.get("disclosed_at") or "shared" for f in case.get("facts", [])}
+        st.caption("Record each fact once and choose when the learner first sees it. Use the value to distinguish not assessed, unknown, absent and normal.")
         with st.form(prefix + "facts_form"):
-            table = st.data_editor(pd.DataFrame(rows, columns=cols), num_rows="dynamic", hide_index=True, width="stretch", key=prefix + "facts_table", column_config={"id": None, "disclosed_at": st.column_config.SelectboxColumn("Visible from", options=stage_ids), "name": "Fact", "value": "Value / state"})
+            table = st.data_editor(pd.DataFrame(rows, columns=cols), num_rows="dynamic", hide_index=True, width="stretch", key=_table_key(prefix, "facts_table"), column_config={"id": None, "disclosed_at": st.column_config.SelectboxColumn("Visible from", options=list(dict.fromkeys(list(labels.values()) + [r["disclosed_at"] for r in rows]))), "name": "Fact", "value": "Value / state", "source": "Source / provenance"})
             if st.form_submit_button("Save facts and disclosure"):
-                facts = table.fillna("").to_dict("records")
+                facts = [row for row in table.fillna("").astype(str).to_dict("records") if row.get("name", "").strip() or row.get("value", "").strip()]
                 for fact in facts:
                     fact["id"] = fact.get("id") or uid("fact")
-                    fact["disclosed_at"] = fact.get("disclosed_at") or "shared"
+                    fact["disclosed_at"] = back.get(fact.get("disclosed_at"), "shared")
                 case["facts"] = facts
+                _table_saved(prefix, "facts_table")
                 _mutation(case, commit, "Edit facts and disclosure")
     with st.expander("Feature values and variant templates", expanded=True):
         st.caption('Use authored values as a JSON list, such as ["mild", "hacking"] or [19,20,21]. Insert {{feature name}} into vignette or item text to assemble variants. Values must be clinically reviewed.')
         fields = ["id", "name", "values", "disclosed_at"]
         rows = [{"id": f.get("id", ""), "name": f.get("name", ""), "values": json.dumps(f.get("values", []), ensure_ascii=False), "disclosed_at": f.get("disclosed_at", "shared")} for f in case.get("features", [])]
         with st.form(prefix + "features_form"):
-            table = st.data_editor(pd.DataFrame(rows, columns=fields), num_rows="dynamic", hide_index=True, width="stretch", key=prefix + "features_table", column_config={"id": None, "values": "Permitted values (JSON list)"})
+            table = st.data_editor(pd.DataFrame(rows, columns=fields), num_rows="dynamic", hide_index=True, width="stretch", key=_table_key(prefix, "features_table"), column_config={"id": None, "values": "Permitted values (JSON list)"})
             if st.form_submit_button("Save feature values"):
                 features, valid = [], True
-                for row in table.fillna("").to_dict("records"):
+                for row in table.fillna("").astype(str).to_dict("records"):
+                    if not row["name"].strip() and not row["values"].strip():
+                        continue
                     values = _load_json(row["values"] or "[]", list, f"Feature {row['name'] or '(unnamed)'}")
                     if values is None:
                         valid = False
@@ -294,7 +373,19 @@ def _model(case, commit, prefix):
                     features.append({"id": row.get("id") or uid("feature"), "name": row["name"], "values": values, "disclosed_at": row.get("disclosed_at") or "shared"})
                 if valid:
                     case["features"] = features
+                    _table_saved(prefix, "features_table")
                     _mutation(case, commit, "Edit feature values")
+        try:
+            combos = combination_table(case)
+        except ValueError as exc:
+            combos = None
+            st.warning(str(exc))
+        if combos and combos["total"]:
+            st.markdown(f"**Constraint matrix** · {combos['permitted']} of {combos['total']} authored combinations are permitted by the current rules.")
+            st.dataframe(pd.DataFrame(combos["rows"]), hide_index=True, width="stretch", height=min(320, 38 * (len(combos["rows"]) + 1)))
+            if combos["truncated"]:
+                st.caption(f"Showing the first {len(combos['rows'])} combinations.")
+            st.caption("‘Permitted’ reflects authored restrictions only. It is not a statement of clinical truth or likelihood.")
     with st.expander("Constraint rules"):
         st.caption('Rules are ANDed. Example: [{"feature":"age","operator":"gte","value":18}]. Operators: equals, not_equals, in, not_in, gt, gte, lt, lte, exists, not_exists. Compound all/any/not rules are supported. These are data, not executable code.')
         with st.form(prefix + "constraints_form"):
@@ -313,13 +404,14 @@ def _model(case, commit, prefix):
         fields = ["title", "url", "note"]
         rows = [{k: row.get(k, "") for k in fields} for row in case.get("sources", [])]
         with st.form(prefix + "sources_form"):
-            table = st.data_editor(pd.DataFrame(rows, columns=fields), num_rows="dynamic", hide_index=True, width="stretch", key=prefix + "sources_table")
+            table = st.data_editor(pd.DataFrame(rows, columns=fields), num_rows="dynamic", hide_index=True, width="stretch", key=_table_key(prefix, "sources_table"))
             if st.form_submit_button("Save sources"):
                 candidate = deepcopy(case)
-                candidate["sources"] = table.fillna("").to_dict("records")
+                candidate["sources"] = [row for row in table.fillna("").astype(str).to_dict("records") if any(v.strip() for v in row.values())]
                 try:
                     normalized = normalize_import(candidate)
                     case["sources"] = normalized["sources"]
+                    _table_saved(prefix, "sources_table")
                     _mutation(case, commit, "Edit clinical sources")
                 except ValueError as exc:
                     st.error(str(exc))
@@ -333,10 +425,29 @@ def _model(case, commit, prefix):
                 st.session_state[prefix + "assembled_variants"] = variants
                 st.success(f"Assembled {len(variants)} permissible case variant(s); expert review is still required.")
             except ValueError as exc:
+                st.session_state.pop(prefix + "assembled_variants", None)
                 st.error(str(exc))
         variants = st.session_state.get(prefix + "assembled_variants")
+        if variants and variants[0].get("generated_from", {}).get("version") != case.get("version"):
+            st.session_state.pop(prefix + "assembled_variants", None)
+            variants = None
+            st.info("The case changed after assembly. Assemble again to use the current content.")
         if variants:
-            st.download_button("Download assembled variants (JSON)", _json({"schema_version": 1, "cases": variants}), file_name="item_dev_variants.json", mime="application/json", key=prefix + "variants_download")
+            st.markdown("**Assembled variants and option-selection reasons**")
+            for number, variant in enumerate(variants, 1):
+                origin = variant.get("generated_from", {})
+                with st.expander(f"Variant {number} · " + (", ".join(f"{k} = {v}" for k, v in origin.get("assignment", {}).items()) or "no varying features")):
+                    st.write(variant["patient"] or "_No shared vignette._")
+                    reasons = origin.get("option_reasons", [])
+                    if reasons:
+                        st.dataframe(pd.DataFrame([{"Item": r["item"], "Option": r["option"], "Included": "Yes" if r["included"] else "No", "Reason": r["reason"]} for r in reasons]), hide_index=True, width="stretch")
+            a, b = st.columns(2)
+            a.download_button("Download assembled variants (JSON)", _json({"schema_version": 1, "cases": variants}), file_name="item_dev_variants.json", mime="application/json", key=prefix + "variants_download", width="stretch")
+            if add_cases is not None and b.button("Add variants to the draft library", key=prefix + "variants_to_library", width="stretch", help="Each variant becomes its own draft with its origin recorded. Review is still required."):
+                add_cases(deepcopy(variants))
+                st.session_state.pop(prefix + "assembled_variants", None)
+                st.session_state["itemdev_notice"] = f"Added {len(variants)} assembled variant(s) to the draft library as unreviewed drafts."
+                st.rerun()
 
 
 def _review(case, commit, prefix):
@@ -400,9 +511,10 @@ def _preview(case, prefix):
         st.info("Create a stage first.")
         return
     state_key = prefix + "preview_state"
-    state = st.session_state.setdefault(state_key, {"index": 0, "responses": {}, "submitted": {}, "version": case.get("version")})
+    state = st.session_state.setdefault(state_key, {"index": 0, "responses": {}, "submitted": {}, "version": case.get("version"), "attempt": 0})
     if state.get("version") != case.get("version"):
         state.update(index=0, responses={}, submitted={}, version=case.get("version"))
+    attempt = f"{state['attempt']}::" if state.get("attempt") else ""
     state["index"] = min(state["index"], len(stages) - 1)
     st.markdown(case["patient"] or "_Shared vignette has not been written._")
     shared = [f for f in case.get("facts", []) if f.get("disclosed_at") in (None, "", "shared")]
@@ -427,7 +539,7 @@ def _preview(case, prefix):
         if facts:
             st.caption(" · ".join(f"{f['name']}: {f.get('value', '')}" for f in facts))
         for item in [i for i in case["items"] if i["stage_id"] == stage["id"]]:
-            pp = prefix + "preview::" + item["id"] + "::"
+            pp = prefix + "preview::" + attempt + item["id"] + "::"
             st.markdown(f"**{item['title']}**")
             if item.get("stem"):
                 st.write(item["stem"])
@@ -474,25 +586,66 @@ def _preview(case, prefix):
                 st.rerun()
         else:
             st.caption("End of case. Earlier-stage responses remain locked.")
+    orphans = [i["title"] for i in case["items"] if i["stage_id"] not in {s["id"] for s in stages}]
+    if orphans:
+        st.warning("Not shown because their disclosure stage is missing: " + "; ".join(orphans) + ". Reassign them in the Write tab.")
     if st.button("Restart learner preview", key=prefix + "preview_restart"):
-        st.session_state.pop(state_key, None)
         for key in list(st.session_state):
-            if key.startswith(prefix + "preview::"):
+            if isinstance(key, str) and key.startswith(prefix + "preview::"):
                 del st.session_state[key]
+        st.session_state[state_key] = {"index": 0, "responses": {}, "submitted": {}, "version": case.get("version"), "attempt": state.get("attempt", 0) + 1}
         st.rerun()
 
 
-def render_editor(case: dict, commit: Callable) -> None:
-    """Render all manual tools; caller persists field edits after this returns."""
-    prefix = case["id"] + "::"
-    if st.session_state.pop(prefix + "refresh_counts", False):
-        st.session_state.pop(prefix + "count_items", None)
-        st.session_state.pop(prefix + "count_stages", None)
-    write, model, review, preview = st.tabs(["✎ Write", "◇ Cognitive model", "✓ Validate & review", "▷ Learner preview"], key=prefix + "editor_tab", on_change="rerun")
+def _case_map(case, prefix):
+    st.markdown("### Case map")
+    bp = case["blueprint"]
+    st.caption("Blueprint trace · " + " → ".join([bp.get("name") or "Blueprint", bp.get("domain") or "domain not set", bp.get("subdomain") or "subdomain not set", bp.get("objective") or "objective not set"]))
+    issues = validate_case(case)
+    per_item = {}
+    for issue in issues:
+        if issue["path"].startswith("items["):
+            index = int(issue["path"][6:issue["path"].index("]")])
+            per_item.setdefault(index, {"error": 0, "warning": 0, "review": 0})[issue["severity"]] += 1
+    st.markdown("#### Stages and their items")
+    st.caption(f"{len(case['items'])} item(s) across {len(case['stages'])} disclosure stage(s). These counts are independent.")
+    stage_ids = {s["id"] for s in case["stages"]}
+    def line(index, item):
+        counts = per_item.get(index, {})
+        flags = ", ".join(f"{counts[k]} {label}" for k, label in (("error", "error(s)"), ("warning", "missing input"), ("review", "review prompt(s)")) if counts.get(k)) or "no findings"
+        return f"- **{index + 1}. {item['title']}** · {item['phase']} · {'single best answer' if item['format'] == 'SBA' else 'multiple selection'} · {flags}"
+    for number, stage in enumerate(case["stages"], 1):
+        st.markdown(f"**Stage {number} · {stage['title']}**")
+        lines = [line(i, item) for i, item in enumerate(case["items"]) if item["stage_id"] == stage["id"]]
+        st.markdown("\n".join(lines) if lines else "- _No items use this stage._")
+    orphans = [line(i, item) for i, item in enumerate(case["items"]) if item["stage_id"] not in stage_ids]
+    if orphans:
+        st.error("Items whose disclosure stage is missing — reassign them in the Write tab:")
+        st.markdown("\n".join(orphans))
+    st.markdown("#### Evidence-to-decision map")
+    st.caption("Visible information → reasoning judgment → keyed response → anticipated errors → what happens next. An MCQ samples judgment; it does not show a learner's internal reasoning.")
+    st.dataframe(pd.DataFrame(evidence_map(case)), hide_index=True, width="stretch")
+    phases = {}
+    for item in case["items"]:
+        phases[item["phase"]] = phases.get(item["phase"], 0) + 1
+    st.markdown("#### Reasoning-phase coverage")
+    st.dataframe(pd.DataFrame([{"Reasoning phase": phase, "Items with this primary phase": phases.get(phase, 0)} for phase in REASONING_PHASES]), hide_index=True, width="stretch")
+    st.caption("Coverage is descriptive. A case need not sample every phase, and a phase can recur.")
+
+
+def render_editor(case: dict, commit: Callable, add_cases: Callable | None = None) -> None:
+    """Render all manual tools; caller persists field edits after this returns.
+
+    ``add_cases(list_of_cases)`` saves assembled variants as new library drafts.
+    """
+    prefix = widget_prefix(case["id"])
+    write, overview, model, review, preview = st.tabs(["✎ Write", "☰ Case map", "◇ Cognitive model", "✓ Validate & review", "▷ Learner preview"], key=case["id"] + "::editor_tab", on_change="rerun")
     with write:
-        _write(case, commit, prefix)
+        _write(case, commit, prefix, case["id"] + "::selected_item_id")
+    with overview:
+        _case_map(case, prefix)
     with model:
-        _model(case, commit, prefix)
+        _model(case, commit, prefix, add_cases)
     with review:
         _review(case, commit, prefix)
     with preview:

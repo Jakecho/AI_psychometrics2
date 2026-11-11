@@ -138,7 +138,7 @@ def render_assistant(case: dict, enabled: bool, commit: Callable) -> None:
     with st.expander("Local typed commands · no AI connection", expanded=False):
         st.caption("Exact commands work with AI off. Commands use the selected item; they do not invent patient facts or answer keys.")
         command = st.text_input("Local command", placeholder="Add another question", key=prefix + "local_command")
-        if st.button("Run local command", key=prefix + "run_command", use_container_width=True):
+        if st.button("Run local command", key=prefix + "run_command", width="stretch"):
             try:
                 _apply_local(case, command, commit)
             except (ValueError, KeyError, TypeError) as exc:
@@ -167,7 +167,7 @@ def render_assistant(case: dict, enabled: bool, commit: Callable) -> None:
     action = st.selectbox("Request type", ["Question or explanation", "Review case", "Suggest distractors", "Appraise recommendation"], key=prefix + "task")
     task = {"Question or explanation": "chat", "Review case": "review", "Suggest distractors": "distractors", "Appraise recommendation": "appraisal"}[action]
     ask, draft = st.columns(2)
-    if ask.button("Ask AI", key=prefix + "ask", disabled=not config["configured"], use_container_width=True):
+    if ask.button("Ask AI", key=prefix + "ask", disabled=not config["configured"], width="stretch"):
         token = _remember_request(prefix)
         try:
             with st.spinner("Requesting authoring assistance…"):
@@ -178,7 +178,7 @@ def render_assistant(case: dict, enabled: bool, commit: Callable) -> None:
                 st.info("The request was superseded or AI was switched off; its result was not retained.")
         except AdapterError as exc:
             st.error(str(exc))
-    if draft.button("Propose item", key=prefix + "propose", disabled=not config["configured"] or item is None, use_container_width=True):
+    if draft.button("Propose item", key=prefix + "propose", disabled=not config["configured"] or item is None, width="stretch"):
         token = _remember_request(prefix)
         try:
             with st.spinner("Preparing a structured draft…"):
@@ -216,7 +216,7 @@ def render_assistant(case: dict, enabled: bool, commit: Callable) -> None:
             stale = current != st.session_state.get(prefix + "proposal_base")
             if stale:
                 st.warning("The case changed after this proposal was generated. Generate a fresh proposal against the current evidence.")
-            if st.button("Apply candidate to draft", key=prefix + "apply", disabled=stale, use_container_width=True):
+            if st.button("Apply candidate to draft", key=prefix + "apply", disabled=stale, width="stretch"):
                 candidate = deepcopy(case)
                 target_id = st.session_state[prefix + "proposal_item_id"]
                 index = next((i for i, value in enumerate(candidate["items"]) if value["id"] == target_id), None)
@@ -229,7 +229,7 @@ def render_assistant(case: dict, enabled: bool, commit: Callable) -> None:
                     st.session_state.pop(prefix + "proposal", None)
                     st.rerun()
 
-    if st.button("Discard AI drafts", key=prefix + "discard", use_container_width=True):
+    if st.button("Discard AI drafts", key=prefix + "discard", width="stretch"):
         st.session_state[prefix + "request_token"] = uuid4().hex
         for key in ("answer", "proposal", "proposal_base", "proposal_item_id"):
             st.session_state.pop(prefix + key, None)
@@ -245,7 +245,7 @@ def render_assistant(case: dict, enabled: bool, commit: Callable) -> None:
             else:
                 recording = None
                 st.info("This Streamlit version does not provide a microphone recorder. Use text or update the app environment.")
-            if st.button("Transcribe recording", key=prefix + "transcribe", disabled=recording is None, use_container_width=True):
+            if st.button("Transcribe recording", key=prefix + "transcribe", disabled=recording is None, width="stretch"):
                 token = _remember_request(prefix)
                 try:
                     with st.spinner("Transcribing recorded message…"):
@@ -256,7 +256,7 @@ def render_assistant(case: dict, enabled: bool, commit: Callable) -> None:
                     st.error(str(exc))
             transcript = st.text_area("Review or edit the transcript", key=prefix + "transcript", height=100)
             use = st.radio("Use transcript as", ["Local command", "AI question", "Append to item stem"], key=prefix + "transcript_use")
-            if st.button("Use reviewed transcript", key=prefix + "use_transcript", disabled=not transcript.strip(), use_container_width=True):
+            if st.button("Use reviewed transcript", key=prefix + "use_transcript", disabled=not transcript.strip(), width="stretch"):
                 if use == "Local command":
                     _apply_local(case, transcript, commit)
                 elif use == "AI question":

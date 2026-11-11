@@ -149,10 +149,14 @@ class ItemDevelopmentAppTests(unittest.TestCase):
         app.text_area(key=prefix + "patient").set_value(changed).run()
         app.button(key="undo:standalone").click().run()
         self.assert_no_exception(app)
-        self.assertEqual(prior, app.text_area(key=prefix + "patient").value)
+        # Recovery rebuilds the form under a new widget generation, so a real
+        # browser cannot keep (and later re-save) the superseded field values.
+        self.assertEqual(1, app.session_state["itemdev_widget_generation"][cid])
+        self.assertEqual(prior, app.text_area(key=cid + "::r1::patient").value)
+        self.assertEqual(prior, storage.load_library()["cases"][cid]["patient"])
         app.button(key="redo:standalone").click().run()
         self.assert_no_exception(app)
-        self.assertEqual(changed, app.text_area(key=prefix + "patient").value)
+        self.assertEqual(changed, app.text_area(key=cid + "::r2::patient").value)
         app.button(key="clone:standalone").click().run()
         self.assert_no_exception(app)
         cloned_id = app.session_state["itemdev_active"]["standalone"]

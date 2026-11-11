@@ -9,7 +9,7 @@ import streamlit as st
 import core
 import storage
 from ai_adapter import get_config
-from ui_editor import render_editor
+from ui_editor import refresh_widgets, render_editor
 from ui_assistant import render_assistant
 
 st.set_page_config(page_title='Item Studio · Family medicine', page_icon='◈', layout='wide', initial_sidebar_state='auto')
@@ -37,17 +37,28 @@ button[kind="primary"] {background:#26776e;border:0;}
 </style>''', unsafe_allow_html=True)
 
 
-def reset_widgets(case_id):
-    for key in list(st.session_state):
-        if isinstance(key, str) and key.startswith(case_id + '::'):
-            del st.session_state[key]
+reset_widgets = refresh_widgets
 
 
 def commit(case, reason='Edit draft'):
+    """Persist a case. A copy edited outside the form widgets replaces the open draft."""
+    current = st.session_state['itemdev_cases'].get(case['id'])
     saved = storage.save_case(case, reason)
     case.clear()
     case.update(saved)
     st.session_state['itemdev_cases'][case['id']] = case
+    if current is not None and current is not case:
+        # A command, proposal or dictation changed the saved case: rebuild the
+        # form from it so stale on-screen values cannot overwrite the change.
+        refresh_widgets(case['id'])
+
+
+def add_cases(cases):
+    created = [storage.import_case(case, suffix='') for case in cases]
+    for case in created:
+        st.session_state['itemdev_cases'][case['id']] = case
+    if created:
+        activate(created[-1])
 
 
 def activate(case):
@@ -117,13 +128,18 @@ with st.sidebar:
     st.divider()
     st.markdown('**Import an existing draft**')
     uploaded = st.file_uploader('Case JSON', type=['json'], key='itemdev_import')
-    if st.button('Import as a new draft', disabled=uploaded is None, width="stretch"):
+    st.caption('A single case, a downloaded variant set, or a library backup.')
+    if st.button('Import as new drafts', disabled=uploaded is None, width="stretch"):
         try:
-            imported = storage.import_case(json.loads(uploaded.getvalue()))
-            activate(imported)
-            st.success('Imported as a new draft. Review approvals require local reassessment.')
+            imported = storage.import_cases(uploaded.getvalue())
+            for entry in imported:
+                activate(entry)
+            st.session_state['itemdev_mode_tab'] = core.MODES[imported[-1]['mode']]
+            st.session_state['itemdev_notice'] = f'Imported {len(imported)} case(s) as new drafts. Imported approvals are kept as history only and need local reassessment.'
+            st.rerun()
         except (ValueError, TypeError, KeyError) as exc:
-            st.error(str(exc))
+            st.error(f'Nothing was imported. {exc}')
+    st.download_button('Back up all drafts (JSON)', json.dumps({'schema_version': core.SCHEMA_VERSION, 'cases': list(st.session_state['itemdev_cases'].values())}, indent=2, ensure_ascii=False), file_name='item-studio-library.json', mime='application/json', key='itemdev_backup', width="stretch")
     st.caption(storage.persistence_description())
     st.caption('No automatic publication or clinical approval.')
 
@@ -133,6 +149,33 @@ if storage.hosted_mode():
     st.info(storage.persistence_description())
 if notice := st.session_state.pop('itemdev_notice', None):
     st.info(notice)
+with st.expander('Library dashboard · all drafts and review states'):
+    rows = []
+    for entry in st.session_state['itemdev_cases'].values():
+        findings = core.validate_case(entry)
+        outdated = sum(bool(r.get('requires_reassessment')) for r in entry.get('reviews', []))
+        rows.append({
+            'Type': core.MODES[entry['mode']], 'Title': entry['title'], 'Review state': entry.get('review_status', 'Draft'),
+            'Revision': entry.get('version', 1), 'Items': len(entry['items']), 'Stages': len(entry['stages']),
+            'Formats': ' + '.join(sorted({i['format'] for i in entry['items']})),
+            'Blueprint': ' → '.join(x for x in (entry['blueprint'].get('domain'), entry['blueprint'].get('subdomain')) if x) or 'Not mapped',
+            'Structural errors': sum(f['severity'] == 'error' for f in findings),
+            'Missing input': sum(f['severity'] == 'warning' for f in findings),
+            'Recorded reviews': len(entry.get('reviews', [])), 'Reviews needing reassessment': outdated,
+            'Provenance': entry.get('provenance', ''), 'Updated (UTC)': entry.get('updated_at', ''),
+        })
+    st.dataframe(rows, hide_index=True, width="stretch")
+    st.caption('Review states record decisions made by named reviewers. No learner response data are stored, so no item statistics are shown.')
+    archived = storage.archived_cases()
+    if archived:
+        restore_col, button_col = st.columns([4, 1])
+        chosen = restore_col.selectbox('Archived drafts', list(archived), format_func=lambda cid: f"{core.MODES.get(archived[cid].get('mode'), '')} · {archived[cid].get('title', cid)}", key='itemdev_archived_pick')
+        button_col.write('')
+        if button_col.button('Restore', key='itemdev_restore', width="stretch"):
+            restored = storage.restore_case(chosen)
+            if restored:
+                activate(restored)
+                st.rerun()
 st.write('')
 
 mode_descriptions = {
@@ -156,10 +199,12 @@ def render_mode(mode):
         st.session_state[f'library:{mode}'] = pending
     if active_id not in matching:
         active_id = matching[0]
+    if st.session_state.get(f'library:{mode}') not in matching:
+        st.session_state[f'library:{mode}'] = active_id
     st.caption(mode_descriptions[mode])
     selector, blank_col, example_col = st.columns([6, 1.6, 1.6])
     with selector:
-        selected_id = st.selectbox('Draft library', matching, index=matching.index(active_id), format_func=lambda cid: cases[cid]['title'], key=f'library:{mode}')
+        selected_id = st.selectbox('Draft library', matching, format_func=lambda cid: cases[cid]['title'], key=f'library:{mode}')
     st.session_state['itemdev_active'][mode] = selected_id
     with blank_col:
         st.write('')
@@ -174,7 +219,7 @@ def render_mode(mode):
             activate(created)
             st.rerun()
     case = cases[selected_id]
-    tools = st.columns([1, 1, 1, 5])
+    tools = st.columns([1, 1, 1, 1, 4])
     if tools[0].button('↶ Undo', key=f'undo:{mode}', width="stretch"):
         recovered = storage.recover(case['id'])
         if recovered:
@@ -195,10 +240,17 @@ def render_mode(mode):
         created = storage.clone_case(case)
         activate(created)
         st.rerun()
-    tools[3].caption(f"Revision {case.get('version', 1)} · {case.get('review_status', 'Draft')} · {len(case['items'])} items / {len(case['stages'])} stages")
+    if tools[3].button('Archive', key=f'archive:{mode}', width="stretch", help='Removes this draft from the working library. It stays recoverable under Library dashboard → Archived drafts.'):
+        storage.archive_case(case['id'])
+        st.session_state['itemdev_cases'].pop(case['id'], None)
+        st.session_state['itemdev_active'][mode] = None
+        st.session_state.pop(f'library:{mode}', None)
+        st.session_state['itemdev_notice'] = 'Draft archived. Restore it from the Library dashboard.'
+        st.rerun()
+    tools[4].caption(f"Revision {case.get('version', 1)} · {case.get('review_status', 'Draft')} · {len(case['items'])} items / {len(case['stages'])} stages")
     editor_col, guide_col = st.columns([3.5, 1.25], gap='large')
     with editor_col:
-        render_editor(case, commit)
+        render_editor(case, commit, add_cases)
     with guide_col:
         render_assistant(case, ai_enabled, commit)
     commit(case, 'Edit draft')
