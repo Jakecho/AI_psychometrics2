@@ -38,7 +38,7 @@ Use the hosted entrypoint when deploying this application from GitHub:
 | --- | --- |
 | Repository | `Jakecho/AI_psychometrics2` |
 | Branch | `main` |
-| Main file path | `item dev/cloud_entry.py` |
+| Main file path | `deploy/item_studio/streamlit_app.py` |
 | Python version | `3.13`, matching the verified local environment |
 | Dependencies | `item dev/requirements.txt`, alongside the hosted entrypoint |
 
@@ -138,3 +138,5 @@ For an isolated local test or alternate local data folder, set `ITEMDEV_DATA_DIR
 The interface checks use Streamlit AppTest, a simulated runtime. They do not establish browser layout quality, live microphone behavior, clinical correctness, or live AI service performance.
 
 No hosting, publication, Git commit, or upload is performed by the launcher.
+
+The deployment entry point uses a space-free path because Community Cloud dependency installation does not quote requirement paths containing spaces. The working app remains in `item dev`; the wrapper loads its hosted entry point.
