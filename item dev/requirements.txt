@@ -1,0 +1,3 @@
+# Versions compatible with the existing AI_psychometrics2 development environment.
+streamlit>=1.66.1,<2
+pandas>=2.3.3,<3

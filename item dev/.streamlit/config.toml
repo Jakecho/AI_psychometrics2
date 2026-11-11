@@ -1,0 +1,16 @@
+[server]
+address = "127.0.0.1"
+port = 8526
+headless = true
+fileWatcherType = "poll"
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#087F8C"
+backgroundColor = "#F7F9FC"
+secondaryBackgroundColor = "#EDF2F7"
+textColor = "#172B4D"
+font = "sans serif"
