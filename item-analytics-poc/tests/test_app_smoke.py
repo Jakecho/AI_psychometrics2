@@ -12,7 +12,7 @@ import src.retrieval
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = str(ROOT / "app.py")
-SECTIONS = ["Data & API", "Search", "Decomposition", "Distractors", "Embedding Visualization",
+SECTIONS = ["Data & API", "Search", "Decomposition", "Distractors", "Feature Spaces", "Embedding Visualization",
             "Difficulty", "Classification", "Enemy Candidates", "Exports"]
 
 
@@ -141,3 +141,30 @@ def test_openai_mode_blocks_requests_until_consent(monkeypatch):
     button = next(b for b in at.button if b.label == "Generate embeddings")
     assert button.disabled
     assert all("sk-test" not in (m.value or "") for m in list(at.markdown) + list(at.caption) + list(at.text))
+
+
+def test_sme_adds_and_removes_space_elements_in_the_app():
+    at = load_demo(new_app())
+    goto(at, "Search")
+    click(at, "Search")
+    goto(at, "Decomposition")
+    click(at, "Propose target task and candidate alignment")
+    click(at, "Accept task")
+    click(at, "Extract features")
+    before = set(at.session_state["store"]["features"])
+    at.selectbox(key="add_type").set_value("instance_context").run()
+    next(t for t in at.text_input if t.label == "Label").input("Fever value")
+    next(m for m in at.multiselect if m.label == "Supporting items").set_value(["S-01"])
+    next(t for t in at.text_input if t.label.startswith("Quote")).input("38.9 °C")
+    click(at, "Add to space")
+    store = at.session_state["store"]
+    added = sorted(set(store["features"]) - before)
+    assert len(added) == 1 and store["features"][added[0]]["origin"] == "sme"
+    next(m for m in at.multiselect if m.label == "Elements to remove").set_value(added).run()
+    click(at, "Remove from space")
+    assert at.session_state["store"]["features"][added[0]]["review_status"] == "removed"
+    goto(at, "Feature Spaces")
+    at.multiselect(key="lib_task").set_value(["Prioritize the first action"]).run()
+    assert not at.exception
+    shown = at.dataframe[-1].value
+    assert len(shown) and set(shown["task"]) == {"Prioritize the first action"} and "removed" not in set(shown["status"])

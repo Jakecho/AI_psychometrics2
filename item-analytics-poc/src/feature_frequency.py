@@ -19,7 +19,7 @@ def _features(store, source):
             if f["review_status"] in APPROVED_STATUSES:
                 out.append((fid, f, f["supporting_items"], f["option_refs"]))
         elif source == "raw":
-            if not f.get("split_from"):
+            if not f.get("split_from") and f.get("origin") != "sme":
                 out.append((fid, f, f["ai"]["supporting_items"], f["ai"]["option_refs"]))
         else:
             raise ValueError("source must be 'sme' or 'raw'")

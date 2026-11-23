@@ -24,8 +24,10 @@ SME_ALIGNMENTS = ("unreviewed",) + ALIGNMENTS
 TASK_STATUSES = ("unreviewed", "accepted", "edited", "rejected")
 REVIEW_STATUSES = (
     "pending", "accepted", "edited", "rejected", "not_required",
-    "context_only", "ambiguous", "unsupported", "needs_adjudication", "merged",
+    "context_only", "ambiguous", "unsupported", "needs_adjudication", "merged", "removed",
 )
+# Statuses that take a feature out of its space (still kept for audit and restore).
+INACTIVE_STATUSES = ("merged", "removed")
 # Statuses that count toward SME-approved incidence.
 APPROVED_STATUSES = ("accepted", "edited")
 IMPORTANCE_ANCHORS = {1: "1 · peripheral", 2: "2 · low", 3: "3 · moderate", 4: "4 · high", 5: "5 · essential"}

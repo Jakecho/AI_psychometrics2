@@ -6,6 +6,8 @@ Implements [`item dev 2/ITEM_ANALYTICS_MASTER_PROMPT_REVIEWED_v2.md`](../item%20
 
 Workflow: **Upload → Map columns → Embed → Search → Confirm same task → Decompose → SME review → Visualize / Export**.
 
+In **Decomposition → Step 4**, SMEs can add elements to each space (key features, instance features, distractor candidates) with verified evidence, and remove or restore elements. **Feature Spaces** lists every space in the session and filters it by task or domain.
+
 ## Run locally
 
 ```bash
@@ -32,7 +34,7 @@ Storage is session-only. A refresh or disconnect loses unsaved work, so use **Ex
 
 ```bash
 cd item-analytics-poc
-python -m pytest -q          # 62 tests; all external network access is blocked during tests
+python -m pytest -q          # 67 tests; all external network access is blocked during tests
 ```
 
 The suite covers the spec's acceptance checks with synthetic data. It uses mocked OpenAI clients and Streamlit `AppTest` for an end-to-end run, section rendering with no data and no key, two-user isolation, the consent gate, and edit persistence across reruns.
@@ -45,14 +47,15 @@ The suite covers the spec's acceptance checks with synthetic data. It uses mocke
 | 2 | Embeddings (OpenAI SDK, batching, bounded retries, reuse by text hash, retry failed rows, bundle) | Implemented; verified against a mocked client and SDK 2.26 signatures. No live call was made. |
 | 3 | Cosine retrieval (exact, Top K / minimum cosine / both, self-exclusion, metadata filter, BM25, RRF) | Implemented |
 | 4 | Task validation (AI proposal with verified evidence, SME accept/edit/reject, same/different/uncertain per candidate) | Implemented |
-| 5 | Four-space decomposition (explicit vs inferred evidence, no count limit, dominance/order, edit/merge/split, 1–5 rating) | Implemented. Canonicalization is deterministic (exact normalized labels); semantic merges are made with the SME merge tool. |
-| 6 | Distractor review (all options, key status, option-level links, misconception hypotheses) | Implemented |
+| 5 | Four-space decomposition (explicit vs inferred evidence, no count limit, dominance/order, edit/merge/split, 1–5 rating, SME add and reversible remove/restore of elements) | Implemented. Canonicalization is deterministic (exact normalized labels); semantic merges are made with the SME merge tool. |
+| 6 | Distractor review (all options, key status, option-level links, misconception hypotheses, SME-added candidates tied to incorrect options) | Implemented |
 | 7 | Feature frequencies (once per distinct confirmed sibling, N/A at N = 0, SME vs raw incidence, option count) | Implemented |
 | 8 | Visualization (PCA/t-SNE/UMAP, metadata colour, category filter, role markers, click-through, incidence heatmap) | Implemented. Optional item-feature network graph and feature-definition embedding plot are not implemented (P2). |
 | 9 | Difficulty heuristic (scale confirmation, unlinked-scale refusal, weighted kNN, grouped holdout vs naive baseline) | Implemented |
 | 10 | Classification heuristic (weighted vote, abstention, multi-label, leakage warning, SME decision, grouped holdout metrics) | Implemented |
 | 11 | Enemy candidates (independent triggers with evidence, linked sets kept separate, SME decisions) | Implemented |
 | 12 | Exports (CSV/XLSX/JSON, incidence matrix, evidence map, audit history, project bundle without keys) | Implemented |
+| 13 | Feature-space library (current and archived spaces, searchable by task, domain, space type, status and keyword) | Implemented |
 
 ## Design decisions
 

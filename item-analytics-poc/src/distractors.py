@@ -11,7 +11,7 @@ def option_review(records_by_id, target_id, sibling_ids, store=None):
     if store:
         for fid in store["order"]:
             f = store["features"][fid]
-            if f["feature_type"] != "distractor_feature" or f["review_status"] == "merged":
+            if f["feature_type"] != "distractor_feature" or f["review_status"] in ("merged", "removed"):
                 continue
             for ref in f["option_refs"]:
                 links.setdefault((ref["item_id"], ref["option_id"]), []).append(fid)

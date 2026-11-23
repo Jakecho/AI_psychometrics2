@@ -22,6 +22,7 @@ from src import feature_frequency as ff
 from src import ingest
 from src import predictions as pr
 from src import retrieval as rt
+from src import space_library as sl
 from src import storage
 from src import task_alignment as ta
 from src import visualization as viz
@@ -32,7 +33,7 @@ from src.text_builder import fingerprint
 
 ROOT = Path(__file__).resolve().parent
 SAMPLE = ROOT / "samples" / "synthetic_items.csv"
-SECTIONS = ["Data & API", "Search", "Decomposition", "Distractors", "Embedding Visualization",
+SECTIONS = ["Data & API", "Search", "Decomposition", "Distractors", "Feature Spaces", "Embedding Visualization",
             "Difficulty", "Classification", "Enemy Candidates", "Exports"]
 NONE = "(none)"
 
@@ -187,7 +188,7 @@ if ss.stale_notice:
 recs = ss.records or []
 index = ss.index
 siblings = ta.accepted_siblings(ss.task_review) if ss.task_review else []
-features = [f for f in (ss.store or {}).get("features", {}).values() if f["review_status"] != "merged"]
+features = [f for f in (ss.store or {}).get("features", {}).values() if f["review_status"] not in ("merged", "removed")]
 reviewed = [f for f in features if f["review_status"] not in ("pending", "needs_adjudication")]
 key_val, key_src = api_key()
 tokens_used = sum(u.get("input_tokens", 0) + u.get("output_tokens", 0) + u.get("tokens", 0) for u in ss.usage_log)
@@ -751,7 +752,7 @@ def _feature_review(target, sib):
                    "re-extract to propose features for newly confirmed items.")
     c1, c2 = st.columns(2)
     view = c1.radio("Show", ["all", "pending", "accepted", "rejected"], horizontal=True, key="feat_view",
-                    format_func=lambda v: {"all": "All proposed", "pending": "Needs review", "accepted": "Accepted", "rejected": "Rejected/merged"}[v])
+                    format_func=lambda v: {"all": "All proposed", "pending": "Needs review", "accepted": "Accepted", "rejected": "Rejected/merged/removed"}[v])
     source = c2.radio("Frequency basis", ["sme", "raw"], horizontal=True, key="freq_source",
                       format_func=lambda v: "SME-approved incidence" if v == "sme" else "Raw AI incidence")
     freq = ff.frequency_table(store, sib, target["item_id"], source="raw")
@@ -767,7 +768,7 @@ def _feature_review(target, sib):
             elif view == "accepted":
                 rows = [f for f in rows if f["review_status"] in ("accepted", "edited")]
             elif view == "rejected":
-                rows = [f for f in rows if f["review_status"] in ("rejected", "not_required", "unsupported", "merged")]
+                rows = [f for f in rows if f["review_status"] in ("rejected", "not_required", "unsupported", "merged", "removed")]
             if not rows:
                 st.caption("No features in this view.")
                 continue
@@ -805,14 +806,14 @@ def _feature_table(rows, ftype, raw_by, sme_by, target_id, n, reviewer):
     if ftype == "distractor_feature":
         columns += ["options"]
     columns += ["evidence", "issues"]
-    statuses = [s for s in REVIEW_STATUSES if s != "merged"]
+    statuses = [s for s in REVIEW_STATUSES if s not in ("merged", "removed")]
     edited = st.data_editor(
         data[columns], hide_index=True, width="stretch", key=f"fe_{ftype}_{ss.store_rev}",
         disabled=["feature_id", "SME coverage", "raw AI coverage", "in target", "supporting items", "options", "evidence", "issues"],
         column_config={
             "canonical_label": st.column_config.TextColumn("label", width="medium"),
             "definition": st.column_config.TextColumn(width="medium"),
-            "review_status": st.column_config.SelectboxColumn("status", options=statuses + ["merged"], required=True),
+            "review_status": st.column_config.SelectboxColumn("status", options=statuses + ["merged", "removed"], required=True),
             "importance": st.column_config.SelectboxColumn("importance 1–5", options=["unrated", "1", "2", "3", "4", "5"], required=True),
             "dominance": st.column_config.SelectboxColumn(options=list(DOMINANCE)),
             "sequence_order": st.column_config.NumberColumn("order", min_value=1, step=1),
@@ -830,10 +831,14 @@ def _feature_table(rows, ftype, raw_by, sme_by, target_id, n, reviewer):
 
 
 def _feature_tools(store, reviewer, sib, target):
-    active = [fid for fid in store["order"] if store["features"][fid]["review_status"] != "merged"]
+    provenance = [fid for fid in store["order"] if store["features"][fid]["review_status"] != "merged"]
+    active = [fid for fid in provenance if store["features"][fid]["review_status"] != "removed"]
     label = lambda fid: f"{fid} · {store['features'][fid]['canonical_label'][:70]}"  # noqa: E731
+    _add_remove_tools(store, reviewer, sib, target, active, label)
+    if not provenance:
+        return
     with st.expander("Provenance, pending AI updates and history"):
-        fid = st.selectbox("Feature", active, format_func=label, key="prov_pick")
+        fid = st.selectbox("Feature", provenance, format_func=label, key="prov_pick")
         f = store["features"][fid]
         st.markdown(f"**{md(f['canonical_label'])}** ({FEATURE_TYPE_LABELS[f['feature_type']]}) — status {f['review_status']}")
         if f.get("inference_rationale"):
@@ -878,6 +883,8 @@ def _feature_tools(store, reviewer, sib, target):
         if hist:
             st.dataframe(pd.DataFrame([{"timestamp": h["timestamp"], "reviewer": h["reviewer"], "action": h["action"]} for h in hist]),
                          hide_index=True)
+    if not active:
+        return
     with st.expander("Merge or split features"):
         c1, c2 = st.columns(2)
         with c1:
@@ -896,6 +903,69 @@ def _feature_tools(store, reviewer, sib, target):
             new_label = st.text_input("Label for the new feature", key=f"split_label_{ss.store_rev}")
             if st.button("Split", disabled=not (move and new_label.strip())):
                 dc.split_feature(store, src, move, new_label, reviewer)
+                bump_store()
+                st.rerun()
+
+
+ADD_LABELS = {"declarative_key": "Key feature — declarative", "procedural_key": "Key feature — procedural",
+              "instance_context": "Instance feature", "distractor_feature": "Distractor candidate"}
+
+
+def _add_remove_tools(store, reviewer, sib, target, active, label):
+    by_id = records_by_id() | {target["item_id"]: target}
+    space_items = [target["item_id"]] + [i for i in sib if i in by_id]
+    with st.expander("Add an element to a space"):
+        ftype = st.selectbox("Space", FEATURE_TYPES, format_func=ADD_LABELS.get, key="add_type")
+        option_labels = {f"{iid}:{o['option_id']}": f"{iid} · {o['option_id']}. {o['text'][:70]}"
+                         for iid in space_items for o in by_id[iid]["options"] if o["is_key"] is False}
+        if ftype == "distractor_feature" and not option_labels:
+            st.caption("No incorrect options with a known key are in this space, so no distractor candidate can be added.")
+        with st.form(f"add_form_{ftype}", clear_on_submit=True):
+            name = st.text_input("Label")
+            definition = st.text_area("Definition", height=70)
+            params = {}
+            if ftype == "distractor_feature":
+                picked = st.multiselect("Incorrect options it comes from", list(option_labels), format_func=option_labels.get)
+                params["option_refs"] = [tuple(p.split(":", 1)) for p in picked]
+                params["misconception"] = st.text_input("Misconception hypothesis (unverified)")
+            else:
+                params["supporting_items"] = st.multiselect("Supporting items", space_items)
+                params["excerpt"] = st.text_input("Quote (must appear verbatim in each selected item)")
+                params["rationale"] = st.text_area("Or an inference rationale (when the feature is not stated in the text)", height=60)
+                if ftype == "procedural_key":
+                    c1, c2, c3 = st.columns(3)
+                    params["dominance"] = c1.selectbox("Dominance", DOMINANCE)
+                    params["procedure_group"] = c2.text_input("Procedure group")
+                    params["sequence_order"] = c3.number_input("Order (0 = none)", 0, 50, 0) or None
+            c1, c2 = st.columns(2)
+            imp = c1.selectbox("Importance", ["unrated", "1", "2", "3", "4", "5"])
+            note = c2.text_input("SME note")
+            if st.form_submit_button("Add to space", type="primary"):
+                try:
+                    fid = dc.add_feature(store, by_id, ftype, name, reviewer, definition=definition, note=note,
+                                         importance=None if imp == "unrated" else int(imp), **params)
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    bump_store()
+                    ss.notice = f"Added {fid} to the {ADD_LABELS[ftype].lower()} space."
+                    st.rerun()
+    removed = [fid for fid in store["order"] if store["features"][fid]["review_status"] == "removed"]
+    with st.expander(f"Remove or restore elements ({len(removed)} removed)"):
+        st.caption("Removal takes an element out of its space, its counts and exports of approved features. It is recorded "
+                   "and reversible; a later AI run cannot bring it back without your confirmation.")
+        c1, c2 = st.columns(2)
+        with c1:
+            to_remove = st.multiselect("Elements to remove", active, format_func=label, key=f"rm_pick_{ss.store_rev}")
+            reason = st.text_input("Reason (recorded)", key=f"rm_reason_{ss.store_rev}")
+            if st.button("Remove from space", disabled=not to_remove):
+                dc.remove_features(store, to_remove, reviewer, reason)
+                bump_store()
+                st.rerun()
+        with c2:
+            to_restore = st.multiselect("Removed elements", removed, format_func=label, key=f"rs_pick_{ss.store_rev}")
+            if st.button("Restore", disabled=not to_restore):
+                dc.restore_features(store, to_restore, reviewer)
                 bump_store()
                 st.rerun()
 
@@ -926,17 +996,44 @@ def page_distractors():
                                "distractor_option_count", "in_target", "review_status", "sme_importance"]],
                          hide_index=True, width="stretch")
             hyps = [(fid, f) for fid, f in ss.store["features"].items()
-                    if f["feature_type"] == "distractor_feature" and f.get("proposed_misconception") and f["review_status"] != "merged"]
+                    if f["feature_type"] == "distractor_feature" and f.get("proposed_misconception") and f["review_status"] not in ("merged", "removed")]
             if hyps:
                 with st.expander("Misconception hypotheses (require SME verification)"):
                     for fid, f in hyps:
                         st.markdown(f"**{fid}** {md(f['canonical_label'])} — {md(f['proposed_misconception'])}")
 
 
+# =========================================================================== Feature spaces
+
+def page_spaces():
+    st.header("5 · Feature space library")
+    require_records()
+    spaces = sl.collect_spaces(ss.task_review, ss.store, ss.archived_reviews, records_by_id())
+    if not spaces:
+        st.info("No feature spaces yet. Build one in **Decomposition**; earlier spaces are kept here when you start a new search.")
+        return
+    st.caption("Search every key-feature, instance and distractor space in this session — the current one and archived ones — "
+               "by task or domain. Coverage uses each space's own confirmed sibling set.")
+    st.dataframe(sl.space_summary(spaces), hide_index=True, width="stretch")
+    table = sl.space_features(spaces)
+    c1, c2, c3, c4 = st.columns(4)
+    tasks = c1.multiselect("Task", sorted(table["task"].unique()) if len(table) else [], key="lib_task")
+    domains = c2.multiselect("Domain", sorted(table["domain"].unique()) if len(table) else [], key="lib_domain")
+    types = c3.multiselect("Space", [FEATURE_TYPE_LABELS[t] for t in FEATURE_TYPES], key="lib_type")
+    statuses = c4.multiselect("Status", sorted(table["status"].unique()) if len(table) else [], key="lib_status")
+    text = st.text_input("Keyword (label, definition, task or domain)", key="lib_text")
+    shown = sl.filter_features(table, tasks, domains, types, statuses, text)
+    if not st.toggle("Include removed elements", key="lib_removed"):
+        shown = shown[shown["status"] != "removed"]
+    st.caption(f"{len(shown)} of {len(table)} elements")
+    st.dataframe(shown, hide_index=True, width="stretch")
+    st.download_button("Filtered elements (CSV)", storage.to_csv_bytes(shown), "feature_space_library.csv", "text/csv")
+
+
 # =========================================================================== Visualization
 
 def page_visualization():
-    st.header("5 · Embedding and feature visualization")
+    st.header("6 · Embedding and feature visualization")
     require_records()
     require_index()
     by_id = records_by_id()
@@ -1010,7 +1107,7 @@ def page_visualization():
 # =========================================================================== Difficulty
 
 def page_difficulty():
-    st.header("6 · Difficulty heuristic")
+    st.header("7 · Difficulty heuristic")
     require_records()
     if not ss.mapping.difficulty:
         st.info("Map an empirical difficulty column (for example Rasch b) in **Data & API** to use this section. "
@@ -1061,7 +1158,7 @@ def page_difficulty():
 # =========================================================================== Classification
 
 def page_classification():
-    st.header("7 · Classification heuristic")
+    st.header("8 · Classification heuristic")
     require_records()
     roles = [r for r in ("domain", "task", "category") if getattr(ss.mapping, r)]
     if not roles:
@@ -1127,7 +1224,7 @@ def page_classification():
 # =========================================================================== Enemies
 
 def page_enemies():
-    st.header("8 · Enemy-item candidates")
+    st.header("9 · Enemy-item candidates")
     require_records()
     st.warning("Every flag is a candidate for SME review. Similarity alone never establishes an enemy pair or an exposure risk.")
     scope_opts = ["Whole bank"] + (["Target and retrieved candidates"] if ss.search else [])
@@ -1212,7 +1309,7 @@ def evidence_rows():
 
 
 def page_exports():
-    st.header("9 · Exports")
+    st.header("10 · Exports")
     require_records()
     st.caption("Exports never contain API keys. Text cells that could run as spreadsheet formulas are neutralised.")
     by_id = records_by_id()
@@ -1250,10 +1347,14 @@ def page_exports():
         t = ss.enemy_table.copy()
         t["sme_decision"] = t["pair_id"].map(lambda p: ss.enemy_decisions.get(p, {}).get("decision", "unreviewed"))
         st.download_button("Enemy candidates and decisions (CSV)", storage.to_csv_bytes(t), "enemy_candidates.csv", "text/csv")
+    spaces = sl.collect_spaces(ss.task_review, ss.store, ss.archived_reviews, by_id)
+    if spaces:
+        st.download_button("Feature space library — all spaces (CSV)", storage.to_csv_bytes(sl.space_features(spaces)),
+                           "feature_space_library.csv", "text/csv")
     if ss.archived_reviews:
         st.caption(f"{len(ss.archived_reviews)} archived review set(s) are included in the bundle and the JSON export.")
 
 
-PAGES = dict(zip(SECTIONS, [page_data, page_search, page_decomposition, page_distractors, page_visualization,
+PAGES = dict(zip(SECTIONS, [page_data, page_search, page_decomposition, page_distractors, page_spaces, page_visualization,
                             page_difficulty, page_classification, page_enemies, page_exports]))
 PAGES[section]()

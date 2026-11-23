@@ -1,6 +1,7 @@
 # MASTER IMPLEMENTATION PROMPT v2 — Reviewed for Engineering, Psychometrics & SME Practice
 
 **Review status:** Cross-role specification review completed 2026-11-22; this is a revised *implementation specification*, not an implemented application.  
+**Amendment v2.1 (2026-11-22):** SME add/remove of elements in the key-feature, instance and distractor spaces (§2.5–2.6, §9, §12, §14 checks 27–28) and a feature-space library searchable by task or domain (§2.13, §12, §14 check 29). A reference implementation lives in `item-analytics-poc/`.  
 **Intended executor:** Claude Code, OpenAI Codex, or a comparable autonomous coding agent.  
 **Artifact type:** Executable implementation specification and acceptance contract, **not** a user-facing essay.  
 **Target:** Streamlit Community Cloud, local VS Code, or other small Python hosting environment.  
@@ -49,14 +50,15 @@ Build a **generic, database-free item bank analytics and cognitive feature decom
 2. **Embedding Generation:** OpenAI Embeddings API for user-selected text columns; batch generation; cache/reuse/export; preserve model configuration and fingerprints.
 3. **Cosine Similarity Retrieval:** Exact in-memory cosine similarity on up to 1,000 item vectors; free-text target or item-ID target; Top K, minimum cosine threshold, or both; unique candidate items; optional BM25 and optional hybrid fusion.
 4. **Task Validation:** AI proposes the target clinical/assessment task and domain, compares candidates with target item; SME verifies which candidates genuinely measure the same task.
-5. **Key-Feature Cognitive Decomposition:** AI extracts unique **declarative key features**, **procedural key features** (one dominant and/or multiple defensible candidate procedures), **instance/context features**, and **distractor features**. Each feature is traceable to source items/options, with literal text evidence distinguished from reasoned task-based inference; SME accepts, rejects, edits, and rates importance.
-6. **Distractor Review and Space:** Display **all** options for each unique sibling item; mark key vs distractors; propose misconception/incorrect-reasoning categories, deduplicate canonical distractor features, and show option-level provenance.
+5. **Key-Feature Cognitive Decomposition:** AI extracts unique **declarative key features**, **procedural key features** (one dominant and/or multiple defensible candidate procedures), **instance/context features**, and **distractor features**. Each feature is traceable to source items/options, with literal text evidence distinguished from reasoned task-based inference; SME accepts, rejects, edits, and rates importance, and can **add** new elements to the declarative, procedural and instance spaces and **remove** elements from any space (see §9).
+6. **Distractor Review and Space:** Display **all** options for each unique sibling item; mark key vs distractors; propose misconception/incorrect-reasoning categories, deduplicate canonical distractor features, and show option-level provenance. The SME can add distractor candidates tied to specific incorrect options and remove candidates from the distractor space.
 7. **Feature Frequencies:** Count each canonical feature **once per distinct accepted sibling item**; show numerator, denominator, percentage, IDs, and SME rating.
 8. **Embedding & Feature Visualization:** PCA, t-SNE and optional UMAP 2D item scatterplot, with user-selected metadata color encoding, hover, filter, linked item details and target/candidate highlighting; separate interpretable feature incidence/heatmap/graph views.
 9. **Difficulty Prediction:** Similarity-based **heuristic** prediction from uploaded empirical difficulty labels (e.g. Rasch `b`), with explicit limitations, neighbor statistics, and holdout diagnostics when data permit.
 10. **Item Classification:** Predict categorical domain/task/blueprint label from labeled neighbors, show evidence and diagnostic confidence, allow abstention and SME override.
 11. **Enemy-Item Candidate Detection:** Flag duplicates, stem/option overlap, same-task near-duplicates, answer leakage, or unsafe co-administration patterns for SME review; never automatically certify true enemies from similarity alone.
 12. **Export/Import Results:** CSV/Excel for search results, unique items, reviewed features, evidence maps, annotations, and session/project bundle with vectors/model IDs/settings (excluding API secrets). Optionally provide JSON export for downstream use.
+13. **Feature-Space Library:** a table in which SMEs search all feature spaces in the session — the current space and every archived one — by **task** and **domain**, with further filters for space type (declarative, procedural, instance, distractor), review status and keyword. Show a per-space summary (task, domain, target, confirmed-sibling N, element counts per space, removed count) and an element table with label, definition, status, origin (AI proposal vs SME-added), importance, SME-approved coverage within that space, supporting items, option references and evidence types. Exportable as CSV.
 
 The UI should be organized around one main sequential workflow: **Upload → Map Columns → Embed → Search → Confirm Same Task → Decompose → SME Review → Visualize / Export**. Ancillary analytical tabs may branch after search.
 
@@ -295,6 +297,8 @@ p_f=100n_f/N\%.
 - For procedural features, allow one dominant procedure and multiple alternatives/candidates; do not force mutually exclusive choice if multiple procedures are genuinely required. Provide `dominance` selector.
 - Preserve raw LLM proposals and SME-approved canonical versions in session data and exports. Never overwrite SME changes on rerun, re-search or LLM retry without confirmation. Review actions must propagate to feature matrices/graphs and exports.
 - Provide accepted-only, all-proposed, and rejected views, with a visible denominator based on confirmed sibling selection.
+- **Add elements (v2.1).** The SME can add an element to the declarative, procedural, instance or distractor space. Key and instance elements need at least one supporting item from the target or confirmed siblings, plus either a quote that appears verbatim in every selected item (`explicit_text`) or an inference rationale (`clinically_inferred`); procedural elements also take dominance, procedure group and order. Distractor candidates must cite incorrect options of items whose key is known; a keyed option or an item without a usable key is refused. Validate SME additions with the same evidence checks as model output and refuse invalid ones with an actionable message. Record SME additions with origin `sme`, status `accepted`, reviewer and timestamp; count them in SME-approved incidence but never in raw AI incidence.
+- **Remove elements (v2.1).** Removal takes an element out of its space, its SME-approved frequency, option links and approved exports. It must be reversible: keep the element with status `removed`, its prior status and an optional reason, and offer **Restore**. Removal is a dedicated action (not a free-text status edit) and is written to the audit history. A later model run that re-proposes a removed element must not resurrect it; route the new evidence to the pending-update confirmation instead.
 
 ## 10. Visualizations
 
@@ -338,11 +342,12 @@ Flag review candidates based on exact duplicate/near-duplicate stem, high cosine
 
 Create a polished, responsive app with sidebar and main workflow:
 
-- Sidebar: **Data & API**, **Search**, **Decomposition**, **Distractors**, **Embedding Visualization**, **Difficulty**, **Classification**, **Enemy Candidates**, **Exports**. Use either `st.tabs` or a small navigation menu; avoid losing state when navigating.
+- Sidebar: **Data & API**, **Search**, **Decomposition**, **Distractors**, **Feature Spaces**, **Embedding Visualization**, **Difficulty**, **Classification**, **Enemy Candidates**, **Exports**. Use either `st.tabs` or a small navigation menu; avoid losing state when navigating.
 - Data pane: drag-drop upload, multi-sheet choice, schema auto-detection, all-column preview, map input text and metadata, ID/key/options, stats and warning banners; explicit **Build Embeddings** button.
 - Search pane: target item from uploaded bank or pasted text, cosine-first, Top K/threshold/both, optional keyword toggle, clear result counts, deduplicated table and complete option cards; submit button.
 - Task pane: task suggestion with source evidence, edit/confirm, and each sibling candidate checkbox/tri-state status before feature extraction.
-- Feature pane: no feature count limit; four categorized panels, feature frequency with denominator, supporting IDs, multi-option distractor references, evidence text, dropdown importance rating 1–5, status/edit tools, procedural dominant/alternative selector.
+- Feature pane: no feature count limit; four categorized panels, feature frequency with denominator, supporting IDs, multi-option distractor references, evidence text, dropdown importance rating 1–5, status/edit tools, procedural dominant/alternative selector, an **Add an element to a space** form (space selector: declarative key feature, procedural key feature, instance feature, distractor candidate) and a **Remove or restore elements** panel.
+- Feature Spaces pane: per-space summary table and a filterable element table (task, domain, space type, status, keyword; removed elements hidden by default), with CSV export.
 - Visualization: PCA/t-SNE/UMAP selector, metadata color dropdown, category filters, target/sibling highlighting, hover/click details, item-feature heatmap, optional network.
 - Status dashboard: file name, N items, N embedded, embedding model/dims, API readiness, N retrieved, N accepted, N features, percentage SME-reviewed; clear warnings about ephemeral storage and API cost.
 - Export center: results CSV/JSON, reviewed feature mapping CSV/XLSX, item-feature incidence CSV, dataset/embedding project bundle, plot export when practical.
@@ -400,6 +405,9 @@ Write real `pytest` unit tests, API-mocked integration tests, and at least one S
 24. API consent is required before network calls; mock mode performs an end-to-end demo without any external requests and reports estimated cost/usage and error state without secrets.
 25. Similarity cutoff 0.85 is labeled a chosen heuristic, not a probability. Retrieval ranks use original embedding space even when t-SNE or UMAP projected coordinates are present.
 26. A candidate item intentionally linked in a multi-part stimulus is not automatically declared an enemy; evidence and human approval required.
+27. The SME adds one element to each of the four spaces. A quote missing from any selected item, a key/instance element with neither quote nor rationale, a distractor citing the keyed option or an item without a usable key, and an unknown option are each refused. Accepted additions carry origin `sme`, appear in SME-approved frequency, and are absent from raw AI incidence.
+28. Removing an element excludes it from SME-approved frequency and distractor option links; re-running extraction that proposes it again leaves it removed with a pending update; Restore returns its prior status; removal and restore appear in the audit history and survive bundle export/import.
+29. With a current and an archived space for different tasks and domains, the Feature Spaces table filters correctly by task, by domain, by space type, by status and by keyword; per-space counts and the removed count are correct; coverage uses each space's own denominator.
 
 ### Suggested synthetic demonstration
 
@@ -429,7 +437,7 @@ Each reviewer must assess **correctness, evidence/provenance, generality to arbi
 At completion, report in this order:
 
 1. **Repository location and exact files created/edited**, with links or relative paths.
-2. **Implemented user flows**, identifying all 12 major capabilities and what is truly operational.
+2. **Implemented user flows**, identifying all 13 major capabilities and what is truly operational.
 3. **Architecture decisions**, especially in-memory vectors, dynamic column mapping, OpenAI embedding/chat adapters, cosine-first design, and candidate SME validation.
 4. **Testing evidence:** commands, passed/failed counts, important edge cases, manual UI checks.
 5. **Launch instructions:** setup, environment, `streamlit run app.py`, and Streamlit Cloud secrets configuration (no real secrets).

@@ -367,11 +367,118 @@ def editor_changes(before_rows, after_rows):
             b = None if blank(prev["sequence_order"]) else int(prev["sequence_order"])
             if a != b:
                 changes["sequence_order"] = a
-        if changes.get("review_status") == "merged":
-            changes.pop("review_status")  # merging goes through merge_features
+        if changes.get("review_status") in ("merged", "removed"):
+            changes.pop("review_status")  # merging and removal go through their own reversible tools
         if changes:
             out[after["feature_id"]] = changes
     return out
+
+
+def _squash(text):
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def add_feature(store, items_by_id, ftype, label, reviewer, definition="", supporting_items=(), excerpt="",
+                rationale="", option_refs=(), dominance=None, procedure_group=None, sequence_order=None,
+                misconception=None, importance=None, note=""):
+    """Add an SME-authored element to a space. Its evidence is validated like an AI proposal.
+
+    Key and instance features need supporting items with either a verbatim quote
+    present in each item or an inference rationale. Distractor candidates need
+    incorrect options of items whose key is known.
+    """
+    if ftype not in FEATURE_TYPES:
+        raise ValueError(f"Unknown feature type '{ftype}'.")
+    if not (label or "").strip():
+        raise ValueError("Enter a label for the new element.")
+    if importance not in (None, 1, 2, 3, 4, 5):
+        raise ValueError("Importance must be unrated or 1–5.")
+    spans = []
+    if ftype == "distractor_feature":
+        if not option_refs:
+            raise ValueError("Choose at least one incorrect option for the distractor candidate.")
+        for iid, oid in option_refs:
+            item = items_by_id.get(iid)
+            option = next((o for o in (item or {}).get("options", []) if o["option_id"] == oid), None)
+            if option is None:
+                raise ValueError(f"Option {oid} of item {iid} does not exist.")
+            spans.append({"item_id": iid, "field": "option", "option_id": oid, "excerpt": option["text"],
+                          "evidence_type": "explicit_text"})
+    else:
+        if not supporting_items:
+            raise ValueError("Choose at least one supporting item.")
+        if not _squash(excerpt) and not (rationale or "").strip():
+            raise ValueError("Quote text from the items or give an inference rationale.")
+        missing = []
+        for iid in dict.fromkeys(supporting_items):
+            item = items_by_id.get(iid)
+            if item is None:
+                raise ValueError(f"Item {iid} is not in this space.")
+            if _squash(excerpt):
+                field = next((f for f, t in item["fields"].items() if _squash(excerpt) in _squash(t)), None)
+                if field is None:
+                    missing.append(iid)
+                    continue
+                spans.append({"item_id": iid, "field": field, "option_id": None, "excerpt": excerpt.strip(),
+                              "evidence_type": "explicit_text"})
+            else:
+                spans.append({"item_id": iid, "field": next(iter(item["fields"])), "option_id": None, "excerpt": "",
+                              "evidence_type": "clinically_inferred"})
+        if missing:
+            raise ValueError(f"The quoted text is not in {', '.join(missing)}. Quote text present in every selected "
+                             "item, or leave the quote empty and give a rationale.")
+    raw = {
+        "feature_id": "sme", "canonical_label": label.strip(), "definition": (definition or "").strip(),
+        "feature_type": ftype, "task_relevance": "", "dominance": dominance, "procedure_group": procedure_group or None,
+        "sequence_order": int(sequence_order) if sequence_order else None,
+        "supporting_items": [s["item_id"] for s in spans], "source_spans": spans,
+        "inference_rationale": (rationale or "").strip(), "proposed_misconception": (misconception or "").strip() or None,
+        "llm_uncertainty_note": "",
+    }
+    clean = validate_feature(raw, items_by_id)
+    if clean["validation_issues"]:
+        raise ValueError("; ".join(dict.fromkeys(clean["validation_issues"])).capitalize() + ".")
+    fid = _next_id(store, ftype)
+    feature = _from_proposal(fid, clean, "sme")
+    feature["ai"]["origin"] = "sme"
+    feature.update({"origin": "sme", "run_ids": [], "review_status": "accepted", "sme_touched": True,
+                    "sme_importance": importance, "sme_note": note or ""})
+    store["features"][fid] = feature
+    store["order"].append(fid)
+    _log(store, reviewer, "add_feature", None, {fid: {"feature_type": ftype, "canonical_label": feature["canonical_label"],
+                                                      "supporting_items": feature["supporting_items"]}})
+    return fid
+
+
+def remove_features(store, fids, reviewer, reason=""):
+    """Take elements out of their space. Reversible: the prior status is kept for restore."""
+    done = []
+    for fid in fids:
+        f = store["features"][fid]
+        if f["review_status"] in ("removed", "merged"):
+            continue
+        f["removed_from_status"] = f["review_status"]
+        f["review_status"] = "removed"
+        f["removal_reason"] = reason
+        f["sme_touched"] = True
+        done.append(fid)
+    if done:
+        _log(store, reviewer, "remove_features", None, {"removed": done, "reason": reason})
+    return done
+
+
+def restore_features(store, fids, reviewer):
+    done = []
+    for fid in fids:
+        f = store["features"][fid]
+        if f["review_status"] != "removed":
+            continue
+        f["review_status"] = f.pop("removed_from_status", None) or "pending"
+        f.pop("removal_reason", None)
+        done.append(fid)
+    if done:
+        _log(store, reviewer, "restore_features", None, {"restored": done})
+    return done
 
 
 def features_frame_rows(store, types=None, view="all"):
@@ -384,7 +491,7 @@ def features_frame_rows(store, types=None, view="all"):
         status = f["review_status"]
         if view == "accepted" and status not in ("accepted", "edited"):
             continue
-        if view == "rejected" and status not in ("rejected", "not_required", "unsupported", "merged"):
+        if view == "rejected" and status not in ("rejected", "not_required", "unsupported", "merged", "removed"):
             continue
         rows.append(f)
     return rows
