@@ -8,7 +8,7 @@ Workflow: **Upload → Map columns → Embed → Search → Confirm same task �
 
 In **Decomposition → Step 4**, SMEs can add elements to each space (key features, instance features, distractor candidates) with verified evidence, and remove or restore elements. **Feature Spaces** lists every space in the session and filters it by task or domain.
 
-In **Search**, the target can be a bank item, a typed query, or a **query file** (CSV/XLSX) with many queries. Try `samples/synthetic_queries.xlsx`: map its columns, embed the queries once, then pick one from the dropdown or click **Search all queries** for a downloadable batch table.
+**Import** has three tabs: **Bank import** (the item bank), **New items** (items to compare against the bank, typed or from an Excel/CSV file such as `samples/synthetic_queries.xlsx`), and **API & embeddings**. New items are embedded with the bank's model when added and are never added to the bank. In **Search**, pick a bank item or a new item from its dropdown, or click **Search all new items** for a downloadable batch table.
 
 ## Run locally
 
@@ -18,7 +18,7 @@ python -m pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Click **Load synthetic demo bank** to try the whole workflow in **Offline mock** mode. This mode makes no network requests. Its vectors are lexical hashes and its proposals are deterministic heuristics, labelled as such. Mock output is not AI or SME analysis.
+In **Import → Bank import**, click **Load synthetic demo bank** to try the whole workflow in **Offline mock** mode. This mode makes no network requests. Its vectors are lexical hashes and its proposals are deterministic heuristics, labelled as such. Mock output is not AI or SME analysis.
 
 For real analysis, choose **OpenAI** mode and provide a key in one of three ways: the masked session field, `OPENAI_API_KEY` in `.streamlit/secrets.toml`, or the environment. Then enter the model ID for task and feature analysis (it must support structured JSON-schema output) and tick the two consent boxes. One consent covers embeddings and the other covers analysis.
 
@@ -36,7 +36,7 @@ Storage is session-only. A refresh or disconnect loses unsaved work, so use **Ex
 
 ```bash
 cd item-analytics-poc
-python -m pytest -q          # 69 tests; all external network access is blocked during tests
+python -m pytest -q          # 70 tests; all external network access is blocked during tests
 ```
 
 The suite covers the spec's acceptance checks with synthetic data. It uses mocked OpenAI clients and Streamlit `AppTest` for an end-to-end run, section rendering with no data and no key, two-user isolation, the consent gate, and edit persistence across reruns.
@@ -47,7 +47,7 @@ The suite covers the spec's acceptance checks with synthetic data. It uses mocke
 | --- | --- | --- |
 | 1 | Import and prepare (CSV/XLSX, sheet choice, profiling, mapping, dedup, variable options, key parsing) | Implemented |
 | 2 | Embeddings (OpenAI SDK, batching, bounded retries, reuse by text hash, retry failed rows, bundle) | Implemented; verified against a mocked client and SDK 2.26 signatures. No live call was made. |
-| 3 | Cosine retrieval (exact, Top K / minimum cosine / both, self-exclusion, metadata filter, BM25, RRF; bank item, typed query, or a CSV/XLSX query file with per-query dropdown and batch search) | Implemented |
+| 3 | Cosine retrieval (exact, Top K / minimum cosine / both, self-exclusion, metadata filter, BM25, RRF; bank item or new item (typed or CSV/XLSX) from a dropdown, plus batch search over all new items) | Implemented |
 | 4 | Task validation (AI proposal with verified evidence, SME accept/edit/reject, same/different/uncertain per candidate) | Implemented |
 | 5 | Four-space decomposition (explicit vs inferred evidence, no count limit, dominance/order, edit/merge/split, 1–5 rating, SME add and reversible remove/restore of elements) | Implemented. Canonicalization is deterministic (exact normalized labels); semantic merges are made with the SME merge tool. |
 | 6 | Distractor review (all options, key status, option-level links, misconception hypotheses, SME-added candidates tied to incorrect options) | Implemented |

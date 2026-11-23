@@ -29,11 +29,11 @@ from src import visualization as viz
 from src.llm import LLMError, MockStructuredLLM, OpenAIStructuredLLM
 from src.schemas import (DOMINANCE, FEATURE_TYPE_LABELS, FEATURE_TYPES, IMPORTANCE_ANCHORS, REVIEW_STATUSES,
                          SME_ALIGNMENTS)
-from src.text_builder import fingerprint
+from src.text_builder import fingerprint, sha256_text
 
 ROOT = Path(__file__).resolve().parent
 SAMPLE = ROOT / "samples" / "synthetic_items.csv"
-SECTIONS = ["Data & API", "Search", "Decomposition", "Distractors", "Feature Spaces", "Embedding Visualization",
+SECTIONS = ["Import", "Search", "Decomposition", "Distractors", "Feature Spaces", "Embedding Visualization",
             "Difficulty", "Classification", "Enemy Candidates", "Exports"]
 NONE = "(none)"
 
@@ -46,7 +46,8 @@ DEFAULTS = {
     "usage_log": [], "archived_reviews": [], "stale_notice": None, "notice": None, "store_rev": 0,
     "llm_mode": "Offline mock (no network)", "consent_embed": False, "consent_llm": False,
     "api_key_input": "", "embed_model": em.DEFAULT_MODEL, "embed_dims": 0, "llm_model": "",
-    "query_df": None, "query_name": None, "query_hash": None, "query_set": None, "query_batch": None,
+    "new_items": {"records": [], "vectors": {}, "basis": None}, "ni_df": None, "ni_name": None, "ni_hash": None,
+    "query_batch": None,
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
@@ -145,13 +146,13 @@ def item_card(record, title=None, show_key=True, cosine=None):
 
 def require_records():
     if not ss.records:
-        st.info("Load an item file in **Data & API** first.")
+        st.info("Load an item file in **Import** first.")
         st.stop()
 
 
 def require_index():
     if ss.index is None:
-        st.info("Generate or import embeddings in **Data & API** first.")
+        st.info("Generate or import embeddings in **Import** first.")
         st.stop()
 
 
@@ -171,6 +172,10 @@ def invalidate_for_new_data(reason):
 
 # =========================================================================== sidebar & status
 
+st.markdown("<style>.block-container{padding-top:2.2rem;padding-bottom:2rem}"
+            "h3{margin-bottom:.2rem} div[data-testid='stExpander'] details summary p{font-size:.92rem}</style>",
+            unsafe_allow_html=True)
+
 with st.sidebar:
     st.markdown("### 🧩 Item Bank Analytics")
     st.caption(f"Proof of concept v{APP_VERSION} · database-free · session-only storage")
@@ -179,13 +184,6 @@ with st.sidebar:
     st.text_input("Reviewer ID or pseudonym", key="reviewer", help="Recorded with SME decisions. Do not enter credentials.")
     st.caption("Session data is lost on refresh or disconnect. Export a project bundle to keep your work.")
 
-st.title("Item Bank Analytics & Cognitive Feature Decomposition")
-if ss.notice:
-    st.success(ss.notice)
-    ss.notice = None
-if ss.stale_notice:
-    st.warning(ss.stale_notice)
-
 recs = ss.records or []
 index = ss.index
 siblings = ta.accepted_siblings(ss.task_review) if ss.task_review else []
@@ -193,32 +191,58 @@ features = [f for f in (ss.store or {}).get("features", {}).values() if f["revie
 reviewed = [f for f in features if f["review_status"] not in ("pending", "needs_adjudication")]
 key_val, key_src = api_key()
 tokens_used = sum(u.get("input_tokens", 0) + u.get("output_tokens", 0) + u.get("tokens", 0) for u in ss.usage_log)
-cols = st.columns(7)
-cols[0].metric("Items", len(recs), help=ss.file_name or "No file loaded")
-cols[1].metric("Embedded", int(index.valid.sum()) if index is not None else 0,
-               help=f"{index.model} · {index.dimensions} dims" if index is not None else "No vectors")
-cols[2].metric("Retrieved", len(ss.search["results"]) if ss.search else 0)
-cols[3].metric("Confirmed siblings (N)", len(siblings))
-cols[4].metric("Features", len(features))
-cols[5].metric("SME-reviewed", f"{100 * len(reviewed) / len(features):.0f}%" if features else "—")
-cols[6].metric("API", "mock" if mock_mode() else ("key ready" if key_val else "no key"), help=f"OpenAI key: {key_src}")
+status = [
+    f"**{len(recs)}** bank items",
+    f"**{len(ss.new_items['records'])}** new items",
+    f"**{int(index.valid.sum()) if index is not None else 0}** embedded" + (f" ({index.model}, {index.dimensions}d)" if index is not None else ""),
+    f"**{len(ss.search['results']) if ss.search else 0}** retrieved",
+    f"siblings N = **{len(siblings)}**",
+    f"**{len(features)}** features" + (f" ({100 * len(reviewed) / len(features):.0f}% reviewed)" if features else ""),
+    "API: " + ("mock" if mock_mode() else ("key ready" if key_val else "no key")),
+]
 if tokens_used:
     mock_only = all("mock" in u["kind"] or str(u.get("model", "")).startswith("mock") for u in ss.usage_log)
-    st.caption(f"Estimated usage this session: about {tokens_used:,} tokens"
-               + (" (mock mode — no API calls were made)." if mock_only else " (see provider billing for actual cost)."))
+    status.append(f"≈{tokens_used:,} tokens" + (" (mock, no API calls)" if mock_only else " (estimate)"))
+st.caption(" · ".join(status))
+if ss.notice:
+    st.success(ss.notice)
+    ss.notice = None
+if ss.stale_notice:
+    st.warning(ss.stale_notice)
 
 
-# =========================================================================== Data & API
+# =========================================================================== Import
 
-def page_data():
-    st.header("1 · Data & API")
-    src_col, demo_col = st.columns([3, 1])
-    with src_col:
-        upload = st.file_uploader("Upload an item bank (.csv or .xlsx, up to 1,000 items)", type=["csv", "xlsx", "xls"])
-    with demo_col:
-        st.write("")
+def page_import():
+    st.subheader("1 · Import")
+    bank_tab, new_tab, api_tab = st.tabs(["Bank import", "New items", "API & embeddings"])
+    with bank_tab:
+        _bank_import()
+    with new_tab:
+        _new_items_panel()
+    with api_tab:
+        if ss.records:
+            _api_and_embeddings()
+        else:
+            st.info("Import a bank first.")
+
+
+def _bank_import():
+    c1, c2 = st.columns([3, 1], vertical_alignment="center")
+    with c1:
+        upload = st.file_uploader("Item bank (.csv or .xlsx, up to 1,000 items)", type=["csv", "xlsx", "xls"])
+    with c2:
         if st.button("Load synthetic demo bank", help="12 invented items for demonstration only.", width="stretch"):
             _load_bytes(SAMPLE.read_bytes(), SAMPLE.name)
+        with st.popover("Import project bundle", width="stretch"):
+            bundle = st.file_uploader("Project bundle (.zip)", type=["zip"], key="bundle_upload")
+            if bundle is not None and st.button("Import bundle"):
+                try:
+                    loaded = storage.import_bundle(bundle.getvalue())
+                except storage.BundleError as exc:
+                    st.error(str(exc))
+                else:
+                    _apply_bundle(loaded, bundle.name)
     if upload is not None:
         data = upload.getvalue()
         h = hashlib.sha256(data).hexdigest()
@@ -230,32 +254,19 @@ def page_data():
         sheet = st.selectbox("Worksheet", sheets) if len(sheets) > 1 else (sheets[0] if sheets else None)
         if h != ss.file_hash or sheet != ss.sheet:
             if ss.records and h != ss.file_hash:
-                st.warning("Loading a new file replaces the current data. Downstream reviews will be archived.")
+                st.caption("⚠️ Loading a new bank replaces the current one; downstream reviews are archived.")
             if st.button("Load this file", type="primary"):
                 _load_bytes(data, upload.name, sheet)
-    with st.expander("Import a project bundle (.zip)"):
-        bundle = st.file_uploader("Project bundle", type=["zip"], key="bundle_upload")
-        if bundle is not None and st.button("Import bundle"):
-            try:
-                loaded = storage.import_bundle(bundle.getvalue())
-            except storage.BundleError as exc:
-                st.error(str(exc))
-            else:
-                _apply_bundle(loaded, bundle.name)
-
     if ss.raw_df is None:
-        st.info("Upload a file, load the synthetic demo bank, or import a project bundle.")
+        st.caption("Upload a bank, load the synthetic demo bank, or import a project bundle.")
         return
     df = ss.raw_df
-    st.subheader("Schema")
-    st.caption(f"{ss.file_name} · {len(df)} rows · {len(df.columns)} columns")
-    st.dataframe(ingest.profile_columns(df), hide_index=True, width="stretch")
-    with st.expander("Preview all columns"):
-        st.dataframe(df, hide_index=True, width="stretch")
+    with st.expander(f"Schema and preview — {ss.file_name} · {len(df)} rows · {len(df.columns)} columns"):
+        st.dataframe(ingest.profile_columns(df), hide_index=True, width="stretch")
+        st.dataframe(df, hide_index=True, width="stretch", height=240)
     _mapping_form(df)
     if ss.records:
         _report()
-        _api_and_embeddings()
 
 
 def _load_bytes(data, name, sheet=None):
@@ -293,10 +304,11 @@ def _apply_bundle(loaded, name):
     ss.class_overrides = review.get("class_overrides", {})
     ss.search = _search_from_bundle(review.get("search"))
     ss.archived_reviews = review.get("archived_reviews", [])
+    ss.new_items = {"records": review.get("new_items", []), "vectors": {}, "basis": None}
     for k in [k for k in ss.keys() if str(k).startswith("map_")]:
         del ss[k]
     bump_store()
-    ss.notice = "Project bundle imported. Vectors, mapping and reviews were validated against the bundle manifest."
+    ss.notice = "Project bundle imported. Vectors, mapping and reviews were validated; re-embed new items if you need them."
     st.rerun()
 
 
@@ -313,27 +325,29 @@ def _opt(cols, current):
 
 
 def _mapping_form(df):
-    st.subheader("Column mapping")
     m = ss.mapping
     cols = list(df.columns)
     with st.form("mapping_form"):
-        text_cols = st.multiselect("Text columns to embed (in this order)", cols, default=[c for c in m.text_columns if c in cols],
-                                   key="map_text", help="Default: vignette, stem and lead-in. The key and labels are never embedded by default.")
-        option_cols = st.multiselect("Answer option columns (any number)", cols, default=[c for c in m.option_columns if c in cols], key="map_opts")
-        include_opts = st.toggle("Include option text in the embedded text", value=m.include_options_in_embed, key="map_inc",
-                                 help="Increases lexical overlap and can surface answer-option leakage. The key marker is never embedded.")
-        c1, c2, c3 = st.columns(3)
+        st.markdown("**Column mapping**")
+        a, b = st.columns(2)
+        text_cols = a.multiselect("Text columns to embed (in this order)", cols, default=[c for c in m.text_columns if c in cols],
+                                  key="map_text", help="Default: vignette, stem and lead-in. The key and labels are never embedded by default.")
+        option_cols = b.multiselect("Answer option columns (any number)", cols, default=[c for c in m.option_columns if c in cols], key="map_opts")
+        grid = st.columns(4)
         picks = {}
-        roles = [("item_id", "Item ID", c1), ("key", "Answer key", c1), ("domain", "Domain", c1), ("task", "Task", c1),
-                 ("category", "Category / blueprint", c2), ("difficulty", "Difficulty (e.g. Rasch b)", c2),
-                 ("p_value", "Classical p-value", c2), ("point_biserial", "Point-biserial", c2),
-                 ("enemy", "Enemy list", c3), ("rationale", "Rationale", c3), ("family", "Linked set / stimulus ID", c3),
-                 ("scale_group", "Scale / calibration group", c3)]
-        for role, label, col in roles:
+        roles = [("item_id", "Item ID"), ("key", "Answer key"), ("domain", "Domain"), ("task", "Task"),
+                 ("category", "Category / blueprint"), ("difficulty", "Difficulty (e.g. Rasch b)"),
+                 ("p_value", "Classical p-value"), ("point_biserial", "Point-biserial"),
+                 ("enemy", "Enemy list"), ("rationale", "Rationale"), ("family", "Linked set / stimulus ID"),
+                 ("scale_group", "Scale / calibration group")]
+        for n, (role, label) in enumerate(roles):
             options, idx = _opt(cols, getattr(m, role))
-            picks[role] = col.selectbox(label, options, index=idx, key=f"map_{role}")
-        categorical = st.multiselect("Treat these numeric-looking columns as categorical", cols,
-                                     default=[c for c, t in m.type_overrides.items() if t == "categorical"], key="map_cat")
+            picks[role] = grid[n % 4].selectbox(label, options, index=idx, key=f"map_{role}")
+        a, b = st.columns(2)
+        categorical = a.multiselect("Treat these numeric-looking columns as categorical", cols,
+                                    default=[c for c, t in m.type_overrides.items() if t == "categorical"], key="map_cat")
+        include_opts = b.toggle("Include option text in the embedded text", value=m.include_options_in_embed, key="map_inc",
+                                help="Increases lexical overlap and can surface answer-option leakage. The key marker is never embedded.")
         submitted = st.form_submit_button("Apply mapping", type="primary")
     if not submitted:
         return
@@ -357,59 +371,256 @@ def _mapping_form(df):
             ss.index = None
             ss.notice = "Mapping applied. The embedded text or settings changed, so the previous vectors were cleared."
             st.rerun()
-    ss.notice = f"Mapping applied: {len(records)} unique items."
+    ss.notice = f"Mapping applied: {len(records)} unique items. Next: API & embeddings."
     st.rerun()
 
 
 def _report():
     r = ss.report
-    st.subheader("Normalized items")
-    c = st.columns(4)
-    c[0].metric("Unique items", r["items"])
-    c[1].metric("Exact duplicates removed", len(r["exact_duplicates_removed"]))
-    c[2].metric("Rows without embed text", len(r["skipped_empty_text"]))
-    c[3].metric("Keys resolved", sum(v for k, v in r["key_status"].items() if k in ("single", "multiple")))
+    keys = sum(v for k, v in r["key_status"].items() if k in ("single", "multiple"))
+    st.caption(f"**{r['items']}** unique items · {len(r['exact_duplicates_removed'])} exact duplicate(s) removed · "
+               f"{len(r['skipped_empty_text'])} row(s) without text skipped · keys resolved for {keys} · "
+               f"template `{r['template']}`")
     if r.get("synthetic_ids"):
-        st.info("No item ID column is mapped; stable IDs were created from source row numbers (ROW-0002…).")
+        st.caption("No item ID column is mapped; stable IDs were created from source row numbers (ROW-0002…).")
     for w in r["warnings"]:
         st.warning(w)
-    if r["exact_duplicates_removed"]:
-        st.caption("Removed exact duplicates: " + ", ".join(f"row {d['source_row']} = row {d['duplicate_of_row']}" for d in r["exact_duplicates_removed"]))
-    if r["skipped_empty_text"]:
-        st.caption("Skipped (no text in embedded columns): " + ", ".join(f"{d['item_id']} (row {d['source_row']})" for d in r["skipped_empty_text"]))
-    if r.get("key_status"):
-        st.caption("Key status: " + ", ".join(f"{k} {v}" for k, v in r["key_status"].items()))
-    st.caption(f"Embedding template: `{r['template']}`")
-    with st.expander("Embedded text preview (first 3 items)"):
-        for rec in ss.records[:3]:
-            st.text(f"[{rec['item_id']}]\n{rec['selected_embed_text']}")
-    with st.expander("Normalized item preview"):
-        st.dataframe(ingest.records_frame(ss.records), hide_index=True, width="stretch")
+    with st.expander("Normalized items and embedded text"):
+        if r["exact_duplicates_removed"]:
+            st.caption("Removed duplicates: " + ", ".join(f"row {d['source_row']} = row {d['duplicate_of_row']}" for d in r["exact_duplicates_removed"]))
+        if r["skipped_empty_text"]:
+            st.caption("Skipped: " + ", ".join(f"{d['item_id']} (row {d['source_row']})" for d in r["skipped_empty_text"]))
+        st.dataframe(ingest.records_frame(ss.records), hide_index=True, width="stretch", height=240)
         pick = st.selectbox("Show item", [r["item_id"] for r in ss.records], key="preview_item")
-        item_card(records_by_id()[pick])
+        rec = records_by_id()[pick]
+        a, b = st.columns(2)
+        with a:
+            item_card(rec)
+        with b:
+            st.text(rec["selected_embed_text"])
 
+
+# --------------------------------------------------------------------------- new items
+
+NEW_PREFIX = "NEW:"
+
+
+def _index_basis():
+    return (ss.index.model, ss.index.requested_dimensions, ss.index.settings_fingerprint) if ss.index is not None else None
+
+
+def _new_vectors():
+    """Vectors of new items, only while they match the current bank index."""
+    ni = ss.new_items
+    return ni["vectors"] if ni["basis"] is not None and ni["basis"] == _index_basis() else {}
+
+
+def _mode_mismatch(index):
+    if index.model == em.MOCK_MODEL and not mock_mode():
+        return "The bank vectors were built in mock mode. Switch to mock mode or regenerate bank embeddings with OpenAI."
+    if index.model != em.MOCK_MODEL and mock_mode():
+        return "The bank vectors were built with OpenAI. Switch to OpenAI mode to embed new items with the same model."
+    return None
+
+
+def _embed_blocker():
+    if ss.index is None:
+        return "Generate bank embeddings first (API & embeddings tab); new items are embedded with the bank's model."
+    if _mode_mismatch(ss.index):
+        return _mode_mismatch(ss.index)
+    if not mock_mode() and not ss.consent_embed:
+        return "Embedding new items sends their text to OpenAI; give embedding consent in the API & embeddings tab."
+    return None
+
+
+def _embed_pending():
+    """Embed new items that have no vector for the current bank index. Returns a message or None."""
+    ni = ss.new_items
+    if ni["basis"] != _index_basis():
+        ni["vectors"], ni["basis"] = {}, None
+    pending = [r for r in ni["records"] if r["item_id"] not in ni["vectors"]]
+    if not pending:
+        return None
+    blocker = _embed_blocker()
+    if blocker:
+        return blocker
+    try:
+        vecs, valid, tokens = em.embed_queries([r["selected_embed_text"] for r in pending], get_embedder(), ss.index)
+    except (em.ConsentError, em.EmbeddingError) as exc:
+        return str(exc)
+    except Exception as exc:  # noqa: BLE001
+        return f"The new items could not be embedded: {em.safe_error(exc)}"
+    ni["basis"] = _index_basis()
+    for r, v, ok in zip(pending, vecs, valid):
+        if ok:
+            ni["vectors"][r["item_id"]] = v
+    log_usage("new-item embedding (mock estimate)" if mock_mode() else "new-item embedding", ss.index.model, {"tokens": tokens})
+    return None
+
+
+def _add_new_items(records):
+    """Add or replace new items by ID, then embed them when allowed."""
+    ni = ss.new_items
+    incoming = {r["item_id"] for r in records}
+    replaced = [r["item_id"] for r in ni["records"] if r["item_id"] in incoming]
+    ni["records"] = [r for r in ni["records"] if r["item_id"] not in incoming] + records
+    for iid in replaced:
+        ni["vectors"].pop(iid, None)
+    problem = _embed_pending()
+    msg = f"Added {len(records)} new item(s)" + (f" ({len(replaced)} replaced by ID)" if replaced else "") + "."
+    ss.notice = msg + (" Embedded with the bank's model." if not problem else " Not embedded yet: " + problem)
+    st.rerun()
+
+
+def _typed_item(text, opts, key, given_id):
+    options = []
+    for n, line in enumerate([l for l in opts.splitlines() if l.strip()]):
+        m = re.match(r"^\s*([A-Za-z])[.)]\s*(.+)$", line)
+        options.append({"option_id": m.group(1).upper() if m else chr(65 + n), "text": (m.group(2) if m else line).strip(),
+                        "is_key": None, "source_column": None})
+    key_ids, status = ingest.parse_key(key, options)
+    if status in ("single", "multiple"):
+        for o in options:
+            o["is_key"] = o["option_id"] in key_ids
+    typed = sum(r.get("origin") == "typed" for r in ss.new_items["records"])
+    source_id = (given_id or "").strip() or f"T{typed + 1:03d}"
+    embed_text = f"Item text: {text.strip()}"
+    return {"internal_id": NEW_PREFIX + source_id, "item_id": NEW_PREFIX + source_id, "source_item_id": source_id,
+            "origin": "typed", "source_row": None, "fields": {"Item text": text.strip()}, "field_order": ["Item text"],
+            "options": options, "key_raw": key or None, "key_status": status, "roles": {}, "metadata": {},
+            "selected_embed_text": embed_text, "embed_text_hash": sha256_text(embed_text), "source_fingerprint": None}
+
+
+def _new_items_panel():
+    if not ss.records:
+        st.info("Import a bank first; new items are compared against it.")
+        return
+    how = st.radio("Add new items by", ["Typing text", "Excel / CSV file"], horizontal=True, key="ni_how")
+    if how == "Typing text":
+        with st.form("ni_text_form", clear_on_submit=True):
+            text = st.text_area("Item text (vignette, stem and lead-in, or any description of the task)", height=110, key="ni_text")
+            a, b, c = st.columns([3, 1, 1])
+            opts = a.text_area("Options (optional, one per line: 'A. text')", height=90, key="ni_opts")
+            key = b.text_input("Key (optional)", key="ni_key")
+            given = c.text_input("ID (optional)", key="ni_id")
+            if st.form_submit_button("Add item", type="primary"):
+                if not text.strip():
+                    st.error("Enter the item text.")
+                else:
+                    _add_new_items([_typed_item(text, opts, key, given)])
+    else:
+        _new_items_file()
+    _new_items_table()
+
+
+def _new_items_file():
+    upload = st.file_uploader("New items file — one row per item (.csv or .xlsx)", type=["csv", "xlsx", "xls"], key="ni_upload")
+    if upload is not None:
+        data = upload.getvalue()
+        h = hashlib.sha256(data).hexdigest()
+        try:
+            sheets = ingest.list_sheets(data, upload.name)
+        except ingest.IngestError as exc:
+            st.error(str(exc))
+            sheets = []
+        sheet = st.selectbox("Worksheet", sheets, key="ni_sheet") if len(sheets) > 1 else (sheets[0] if sheets else None)
+        if (h, sheet) != ss.ni_hash and st.button("Load file"):
+            try:
+                ss.ni_df = ingest.read_table(data, upload.name, sheet)
+            except ingest.IngestError as exc:
+                st.error(str(exc))
+            else:
+                ss.ni_name, ss.ni_hash = upload.name, (h, sheet)
+                st.rerun()
+    df = ss.ni_df
+    if df is None:
+        st.caption("Columns are mapped like the bank; columns whose names match the bank's text columns are preselected.")
+        return
+    cols = list(df.columns)
+    guess = ingest.detect_mapping(df)
+    bank_text = [c for c in ss.mapping.text_columns if c in cols]
+    with st.form("ni_map_form"):
+        st.caption(f"{ss.ni_name or 'File'} · {len(df)} rows · {len(cols)} columns")
+        a, b = st.columns(2)
+        text_cols = a.multiselect("Text columns (in this order)", cols, default=bank_text or guess.text_columns)
+        opt_cols = b.multiselect("Option columns (optional)", cols, default=guess.option_columns)
+        c1, c2, c3, c4 = st.columns(4)
+        ids, idx = _opt(cols, guess.item_id)
+        id_col = c1.selectbox("ID column", ids, index=idx)
+        keys, kidx = _opt(cols, guess.key)
+        key_col = c2.selectbox("Key column", keys, index=kidx)
+        doms, didx = _opt(cols, guess.domain)
+        dom_col = c3.selectbox("Domain column", doms, index=didx)
+        tasks, tidx = _opt(cols, guess.task)
+        task_col = c4.selectbox("Task column", tasks, index=tidx)
+        if st.form_submit_button(f"Add {len(df)} items", type="primary"):
+            mapping = ingest.ColumnMapping(item_id=None if id_col == NONE else id_col, text_columns=text_cols,
+                                           option_columns=opt_cols, key=None if key_col == NONE else key_col,
+                                           domain=None if dom_col == NONE else dom_col, task=None if task_col == NONE else task_col,
+                                           include_options_in_embed=ss.mapping.include_options_in_embed)
+            try:
+                records, _unused = ingest.build_records(df, mapping)
+            except ingest.IngestError as exc:
+                st.error(str(exc))
+            else:
+                for r in records:
+                    r["source_item_id"] = r["item_id"]
+                    r["item_id"] = r["internal_id"] = NEW_PREFIX + r["item_id"]
+                    r["origin"] = "file"
+                _add_new_items(records)
+
+
+def _new_items_table():
+    ni = ss.new_items
+    if not ni["records"]:
+        return
+    vecs = _new_vectors()
+    table = pd.DataFrame([{"id": r["source_item_id"], "source": r.get("origin", ""), "text": viz._preview(r, 90),
+                           "options": len(r["options"]), "key": r["key_status"], "embedded": r["item_id"] in vecs}
+                          for r in ni["records"]])
+    st.dataframe(table, hide_index=True, width="stretch", height=min(320, 38 + 35 * len(table)))
+    pending = int((~table["embedded"]).sum())
+    blocker = _embed_blocker() if pending else None
+    a, b, c = st.columns([2, 1, 1], vertical_alignment="bottom")
+    drop = a.multiselect("Remove new items", [r["item_id"] for r in ni["records"]], key=f"ni_drop_{len(ni['records'])}",
+                         format_func=lambda i: i[len(NEW_PREFIX):])
+    if b.button("Remove", disabled=not drop, width="stretch"):
+        ni["records"] = [r for r in ni["records"] if r["item_id"] not in drop]
+        for iid in drop:
+            ni["vectors"].pop(iid, None)
+        st.rerun()
+    if pending and c.button(f"Embed {pending} pending", width="stretch", disabled=bool(blocker)):
+        problem = _embed_pending()
+        if problem:
+            st.error(problem)
+        else:
+            st.rerun()
+    if blocker:
+        st.caption(blocker)
+
+
+# --------------------------------------------------------------------------- API & embeddings
 
 def _api_and_embeddings():
-    st.subheader("API mode, consent and embeddings")
     st.radio("Analysis mode", ["Offline mock (no network)", "OpenAI"], key="llm_mode", horizontal=True,
              help="Mock mode runs the whole workflow offline with deterministic lexical vectors and heuristic proposals. "
                   "Its output is labelled and is not AI or SME analysis.")
     if mock_mode():
-        st.info("Mock mode: no external requests are made. Vectors are lexical hashes and proposals are heuristics, for demonstration only.")
+        st.caption("Mock mode: no external requests. Vectors are lexical hashes and proposals are heuristics, for demonstration only.")
     else:
         key, src = api_key()
-        st.text_input("OpenAI API key (kept in this session only)", type="password", key="api_key_input",
-                      help="Not written to disk, exports, logs or the URL. Streamlit secrets or the OPENAI_API_KEY environment variable are used when this is empty.")
-        st.caption(f"Key source: {src}.")
+        a, b = st.columns([2, 1], vertical_alignment="bottom")
+        a.text_input("OpenAI API key (kept in this session only)", type="password", key="api_key_input",
+                     help="Not written to disk, exports, logs or the URL. Streamlit secrets or the OPENAI_API_KEY environment variable are used when this is empty.")
+        b.caption(f"Key source: {src}.")
         c1, c2, c3 = st.columns(3)
         c1.text_input("Embedding model", key="embed_model")
         c2.number_input("Embedding dimensions (0 = model default)", min_value=0, max_value=3072, step=64, key="embed_dims",
                         help="Only for models that support shortened embeddings.")
         c3.text_input("Model for task and feature analysis", key="llm_model", placeholder="A model ID enabled for your account",
                       help="Must support structured JSON-schema output.")
-        st.warning("**Privacy notice.** Generating embeddings sends the embedded text of every item to OpenAI. Task proposal and feature "
-                   "decomposition send only the target and the candidates you confirm. Item content may be proprietary; you can "
-                   "decline and continue exploring metadata locally.")
+        st.caption("🔒 **Privacy.** Embedding sends the embedded text of every bank item and new item to OpenAI. Task proposal and "
+                   "decomposition send only the target and the candidates you confirm. You can decline and keep exploring locally.")
         st.checkbox("I consent to sending item embedding text to OpenAI for embeddings", key="consent_embed")
         st.checkbox("I consent to sending the target and confirmed items to OpenAI for task and feature analysis", key="consent_llm")
 
@@ -419,17 +630,20 @@ def _api_and_embeddings():
     todo = len(texts) if not current else int((~ss.index.valid).sum())
     est = em.estimate_tokens(texts)
     cost = em.estimate_cost(model, est)
-    st.caption(f"{len(texts)} items · about {est:,} tokens" + (f" · approx. ${cost:.4f} at list price" if cost is not None and not mock_mode() else "")
-               + f" · model {model}" + (f" · {dims} dims" if dims else ""))
-    if ss.index is not None and not current:
-        st.warning("The existing vectors were built with different text or settings. Regenerating replaces them; search results become stale.")
+    a, b = st.columns([3, 1], vertical_alignment="center")
     if current and todo == 0:
-        st.success(f"All {len(texts)} items are embedded with {ss.index.model} ({ss.index.dimensions} dims). Search works offline from here.")
-    label = "Generate embeddings" if not current else f"Retry {todo} failed items"
-    if (not current or todo) and st.button(label, type="primary", disabled=not mock_mode() and not ss.consent_embed):
-        _generate(model, dims, fp)
-    if not mock_mode() and not ss.consent_embed:
-        st.caption("Embedding is disabled until you give consent.")
+        a.success(f"All {len(texts)} bank items are embedded with {ss.index.model} ({ss.index.dimensions} dims). Search works offline from here.")
+    else:
+        a.caption(f"{len(texts)} bank items · about {est:,} tokens"
+                  + (f" · approx. ${cost:.4f} at list price" if cost is not None and not mock_mode() else "")
+                  + f" · model {model}" + (f" · {dims} dims" if dims else ""))
+        if ss.index is not None and not current:
+            a.caption("⚠️ The existing vectors were built with different text or settings; regenerating replaces them.")
+        label = "Generate embeddings" if not current else f"Retry {todo} failed items"
+        if b.button(label, type="primary", disabled=not mock_mode() and not ss.consent_embed, width="stretch"):
+            _generate(model, dims, fp)
+        if not mock_mode() and not ss.consent_embed:
+            a.caption("Embedding is disabled until you give consent.")
     if ss.index is not None and ss.index.errors:
         with st.expander(f"{len(ss.index.errors)} embedding issue(s)"):
             for e in ss.index.errors:
@@ -456,39 +670,46 @@ def _generate(model, dims, fp):
     ss.proj_cache = {}
     reused = previous.usage_tokens if previous is not None and previous.settings_fingerprint == fp else 0
     log_usage("embedding (mock estimate)" if mock_mode() else "embedding", model, {"tokens": max(0, new.usage_tokens - reused)})
-    ss.notice = f"Embedded {int(new.valid.sum())}/{len(ss.records)} items." + (" Some items failed; use Retry." if new.errors else "")
+    msg = f"Embedded {int(new.valid.sum())}/{len(ss.records)} bank items." + (" Some items failed; use Retry." if new.errors else "")
+    if ss.new_items["records"]:
+        problem = _embed_pending()
+        msg += " New items were embedded too." if not problem else f" New items not embedded: {problem}"
+    ss.notice = msg
     st.rerun()
 
 
 # =========================================================================== Search
 
 def page_search():
-    st.header("2 · Cosine similarity search")
+    st.subheader("2 · Cosine similarity search")
     require_records()
     require_index()
     by_id = records_by_id()
-    st.caption("Ranking is exact cosine similarity in the original embedding space. Keyword ranking is optional and secondary.")
-    source = st.radio("Target", ["Item from the bank", "Type a query", "Query file (CSV/XLSX)"], horizontal=True,
-                      key="target_source", help="A typed query or query-file items are embedded with the bank's model; they are not added to the bank.")
+    ni = ss.new_items
+    a, b = st.columns([1, 3], vertical_alignment="bottom")
+    source = a.radio("Target", ["Bank item", "New item"], horizontal=True, key="target_source")
     target = None
-    if source == "Item from the bank":
-        ids = [r["item_id"] for r in ss.records]
-        tid = st.selectbox("Target item", ids, key="target_pick",
-                           format_func=lambda i: f"{i} — {viz._preview(by_id[i], 80)}")
-        target = by_id[tid]
-    elif source == "Query file (CSV/XLSX)":
-        target = _query_file_panel()
-    else:
-        text = st.text_area("Query text for semantic search (an item, a stem, or any description of the task)", key="new_text", height=120)
-        opts = st.text_area("Options (optional, one per line, e.g. 'A. option text')", key="new_opts", height=100)
-        key = st.text_input("Key (optional option ID)", key="new_key")
-        target = _new_target(text, opts, key)
-    c1, c2, c3 = st.columns(3)
-    mode = c1.radio("Filter", ["Top K", "Minimum cosine similarity", "Both"], key="search_mode")
-    k = c2.number_input("Top K (unique items)", 1, max(1, len(ss.records)), min(5, len(ss.records)), key="search_k")
+    with b:
+        if source == "Bank item":
+            tid = st.selectbox("Bank item", [r["item_id"] for r in ss.records], key="target_pick",
+                               format_func=lambda i: f"{i} — {viz._preview(by_id[i], 90)}")
+            target = by_id[tid]
+        elif not ni["records"]:
+            st.info("No new items yet — add them in **Import → New items** (typed text or an Excel/CSV file).")
+        else:
+            by_new = {r["item_id"]: r for r in ni["records"]}
+            vecs = _new_vectors()
+            labels = {i: f"{i[len(NEW_PREFIX):]}{'' if i in vecs else ' (not embedded)'} — {viz._preview(r, 80)}"
+                      for i, r in by_new.items()}
+            nid = st.selectbox(f"New item ({len(by_new)})", list(by_new), key="new_pick", format_func=labels.get)
+            target = by_new[nid]
+    c1, c2, c3, c4 = st.columns([2, 1, 2, 2], vertical_alignment="bottom")
+    mode = c1.radio("Filter", ["Top K", "Minimum cosine similarity", "Both"], key="search_mode", horizontal=True)
+    k = c2.number_input("Top K", 1, max(1, len(ss.records)), min(5, len(ss.records)), key="search_k",
+                        help="Counts unique items, never options.")
     thr = c3.slider("Minimum cosine similarity", -1.0, 1.0, rt.DEFAULT_THRESHOLD, 0.01, key="search_thr",
                     help="0.85 is an illustrative, adjustable heuristic — not a probability and not proof of the same task.")
-    with st.expander("Metadata filter and optional keyword ranking"):
+    with c4.popover("Metadata filter · keyword ranking", width="stretch"):
         meta_cols = [NONE] + list(ss.records[0]["metadata"].keys())
         fcol = st.selectbox("Restrict candidates by metadata column", meta_cols, key="search_fcol")
         allowed = None
@@ -501,136 +722,29 @@ def page_search():
         hybrid = st.checkbox("Rank by RRF fusion of cosine and BM25 ranks", key="search_hybrid", disabled=not use_bm25,
                              help="RRF is a rank-fusion measure, not a similarity. Any threshold still applies to cosine only.")
     mode_key = {"Top K": "top_k", "Minimum cosine similarity": "threshold", "Both": "both"}[mode]
-    b1, b2 = st.columns([1, 3])
-    if b1.button("Search", type="primary", disabled=target is None):
+    b1, b2, _ = st.columns([1, 1.4, 3])
+    if b1.button("Search", type="primary", disabled=target is None, width="stretch"):
         _run_search(target, mode_key, int(k), float(thr), allowed, use_bm25, hybrid)
-    if source == "Query file (CSV/XLSX)" and _query_vectors() is not None:
-        if b2.button(f"Search all {len(ss.query_set['records'])} queries"):
-            _batch_search(mode_key, int(k), float(thr), allowed)
+    embedded_new = [r for r in ni["records"] if r["item_id"] in _new_vectors()]
+    if source == "New item" and embedded_new:
+        if b2.button(f"Search all {len(embedded_new)} new items", width="stretch"):
+            _batch_search(embedded_new, mode_key, int(k), float(thr), allowed)
         _show_batch()
     _show_search()
 
 
-QUERY_PREFIX = "Q:"
-
-
-def _mode_mismatch(index):
-    if index.model == em.MOCK_MODEL and not mock_mode():
-        return "These vectors were built in mock mode. Switch to mock mode or regenerate embeddings with OpenAI."
-    if index.model != em.MOCK_MODEL and mock_mode():
-        return "These vectors were built with OpenAI. Switch to OpenAI mode to embed queries with the same model."
-    return None
-
-
-def _query_vectors():
-    """Stored query vectors, only while they match the current bank index."""
-    qs = ss.query_set
-    if not qs or qs.get("vectors") is None or ss.index is None:
-        return None
-    return qs["vectors"] if qs["basis"] == (ss.index.model, ss.index.requested_dimensions, ss.index.settings_fingerprint) else None
-
-
-def _query_file_panel():
-    upload = st.file_uploader("Query file — one row per query item (.csv or .xlsx)", type=["csv", "xlsx", "xls"], key="query_upload")
-    if upload is not None:
-        data = upload.getvalue()
-        h = hashlib.sha256(data).hexdigest()
-        try:
-            sheets = ingest.list_sheets(data, upload.name)
-        except ingest.IngestError as exc:
-            st.error(str(exc))
-            sheets = []
-        sheet = st.selectbox("Worksheet", sheets, key="query_sheet") if len(sheets) > 1 else (sheets[0] if sheets else None)
-        if (h, sheet) != ss.query_hash and st.button("Load query file"):
-            try:
-                df = ingest.read_table(data, upload.name, sheet)
-            except ingest.IngestError as exc:
-                st.error(str(exc))
-            else:
-                ss.query_df, ss.query_name, ss.query_hash = df, upload.name, (h, sheet)
-                ss.query_set, ss.query_batch = None, None
-                st.rerun()
-    df = ss.query_df
-    if df is None:
-        st.caption("Columns are mapped like the bank. Matching column names (for example vignette and stem) are selected automatically.")
-        return None
-    cols = list(df.columns)
-    guess = ingest.detect_mapping(df)
-    bank_text = [c for c in ss.mapping.text_columns if c in cols]
-    with st.form("query_map_form"):
-        st.caption(f"{ss.query_name or 'Query file'} · {len(df)} rows · {len(cols)} columns")
-        text_cols = st.multiselect("Query text columns (in this order)", cols, default=bank_text or guess.text_columns)
-        c1, c2, c3 = st.columns(3)
-        ids, idx = _opt(cols, guess.item_id)
-        id_col = c1.selectbox("Query ID column", ids, index=idx)
-        opt_cols = c2.multiselect("Option columns (optional)", cols, default=guess.option_columns)
-        keys, kidx = _opt(cols, guess.key)
-        key_col = c3.selectbox("Key column (optional)", keys, index=kidx)
-        if st.form_submit_button("Use these columns", type="primary"):
-            mapping = ingest.ColumnMapping(item_id=None if id_col == NONE else id_col, text_columns=text_cols,
-                                           option_columns=opt_cols, key=None if key_col == NONE else key_col,
-                                           domain=guess.domain, task=guess.task,
-                                           include_options_in_embed=ss.mapping.include_options_in_embed)
-            try:
-                records, report = ingest.build_records(df, mapping)
-            except ingest.IngestError as exc:
-                st.error(str(exc))
-            else:
-                for r in records:
-                    r["source_item_id"] = r["item_id"]
-                    r["item_id"] = r["internal_id"] = f"{QUERY_PREFIX}{r['item_id']}"
-                ss.query_set = {"records": records, "report": report, "vectors": None, "valid": None, "basis": None,
-                                "name": ss.query_name}
-                ss.query_batch = None
-                st.rerun()
-    qs = ss.query_set
-    if not qs:
-        return None
-    if qs["report"]["skipped_empty_text"] or qs["report"]["exact_duplicates_removed"]:
-        st.caption(f"{len(qs['report']['skipped_empty_text'])} row(s) without text skipped · "
-                   f"{len(qs['report']['exact_duplicates_removed'])} exact duplicate(s) removed")
-    if _query_vectors() is None:
-        mismatch = _mode_mismatch(ss.index)
-        blocked = bool(mismatch) or (not mock_mode() and not ss.consent_embed)
-        if mismatch:
-            st.warning(mismatch)
-        elif blocked:
-            st.caption("Embedding the queries sends their text to OpenAI; give embedding consent in **Data & API**.")
-        if st.button(f"Embed {len(qs['records'])} query item(s)", type="primary", disabled=blocked):
-            try:
-                vecs, valid, tokens = em.embed_queries([r["selected_embed_text"] for r in qs["records"]], get_embedder(), ss.index)
-            except (em.ConsentError, em.EmbeddingError) as exc:
-                st.error(str(exc))
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"The queries could not be embedded: {em.safe_error(exc)}")
-            else:
-                qs.update(vectors=vecs, valid=valid,
-                          basis=(ss.index.model, ss.index.requested_dimensions, ss.index.settings_fingerprint))
-                log_usage("query embedding (mock estimate)" if mock_mode() else "query embedding", ss.index.model, {"tokens": tokens})
-                st.rerun()
-        return None
-    by_q = {r["item_id"]: r for r in qs["records"]}
-    qid = st.selectbox(f"Query item ({len(by_q)} loaded)", list(by_q), key="query_pick",
-                       format_func=lambda i: f"{i[len(QUERY_PREFIX):]} — {viz._preview(by_q[i], 80)}")
-    return by_q[qid]
-
-
-def _batch_search(mode, k, thr, allowed):
-    qs = ss.query_set
+def _batch_search(items, mode, k, thr, allowed):
+    vecs = _new_vectors()
     rows = []
     by_id = records_by_id()
-    for pos, q in enumerate(qs["records"]):
-        if not qs["valid"][pos]:
-            rows.append({"query_id": q["source_item_id"], "rank": None, "item_id": None, "cosine_similarity": None,
-                         "note": "zero vector"})
-            continue
-        res = rt.select(rt.cosine_scores(ss.index, qs["vectors"][pos]), ss.index.item_ids, mode, k, thr, None, allowed)
+    for q in items:
+        res = rt.select(rt.cosine_scores(ss.index, vecs[q["item_id"]]), ss.index.item_ids, mode, k, thr, None, allowed)
         if res.empty:
-            rows.append({"query_id": q["source_item_id"], "rank": None, "item_id": None, "cosine_similarity": None,
-                         "note": "no item met the filter"})
+            rows.append({"new_item_id": q["source_item_id"], "rank": None, "item_id": None, "cosine_similarity": None,
+                         "domain": None, "task": None, "note": "no bank item met the filter"})
         for _, r in res.iterrows():
             rec = by_id[r["item_id"]]
-            rows.append({"query_id": q["source_item_id"], "rank": int(r["rank"]), "item_id": r["item_id"],
+            rows.append({"new_item_id": q["source_item_id"], "rank": int(r["rank"]), "item_id": r["item_id"],
                          "cosine_similarity": r["cosine_similarity"], "domain": rec["roles"].get("domain"),
                          "task": rec["roles"].get("task"), "note": ""})
     ss.query_batch = {"table": pd.DataFrame(rows), "mode": mode, "k": k, "threshold": thr}
@@ -643,50 +757,23 @@ def _show_batch():
         return
     table = b["table"]
     label = {"top_k": f"top {b['k']}", "threshold": f"cosine ≥ {b['threshold']:.2f}", "both": f"cosine ≥ {b['threshold']:.2f}, top {b['k']}"}[b["mode"]]
-    with st.expander(f"Batch results for {table['query_id'].nunique()} queries ({label}, cosine only)", expanded=True):
-        st.dataframe(table, hide_index=True, width="stretch",
+    with st.expander(f"Batch results · {table['new_item_id'].nunique()} new items · {label} · cosine only", expanded=True):
+        st.dataframe(table, hide_index=True, width="stretch", height=min(360, 38 + 35 * len(table)),
                      column_config={"cosine_similarity": st.column_config.NumberColumn(format="%.4f")})
         st.download_button("Batch results (CSV)", storage.to_csv_bytes(table), "batch_search_results.csv", "text/csv")
-        st.caption("Pick a query in the dropdown and click Search to review its candidates and continue to task confirmation.")
-
-
-def _new_target(text, opts, key):
-    if not text.strip():
-        return None
-    options = []
-    for n, line in enumerate([l for l in opts.splitlines() if l.strip()]):
-        m = re.match(r"^\s*([A-Za-z])[.)]\s*(.+)$", line)
-        options.append({"option_id": m.group(1).upper() if m else chr(65 + n), "text": (m.group(2) if m else line).strip(),
-                        "is_key": None, "source_column": None})
-    key_ids, status = ingest.parse_key(key, options)
-    if status in ("single", "multiple"):
-        for o in options:
-            o["is_key"] = o["option_id"] in key_ids
-    return {"internal_id": ta.NEW_TARGET_ID, "item_id": ta.NEW_TARGET_ID, "source_row": None,
-            "fields": {"Item text": text.strip()}, "field_order": ["Item text"], "options": options,
-            "key_raw": key or None, "key_status": status, "roles": {}, "metadata": {},
-            "selected_embed_text": f"Item text: {text.strip()}", "embed_text_hash": None, "source_fingerprint": None}
 
 
 def _run_search(target, mode, k, thr, allowed, use_bm25, hybrid):
     index = ss.index
-    if target["item_id"].startswith(QUERY_PREFIX):
-        vecs = _query_vectors()
-        pos = next(i for i, r in enumerate(ss.query_set["records"]) if r["item_id"] == target["item_id"])
-        if vecs is None or not ss.query_set["valid"][pos]:
-            st.error("Embed the query items first.")
-            return
-        q, exclude = vecs[pos], None
-    elif target["item_id"] == ta.NEW_TARGET_ID:
-        if _mode_mismatch(index):
-            st.error(_mode_mismatch(index))
-            return
-        try:
-            q = em.embed_query(target["selected_embed_text"], get_embedder(), index)
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"The query could not be embedded: {em.safe_error(exc) if not isinstance(exc, (em.ConsentError, em.EmbeddingError)) else exc}")
-            return
-        exclude = None
+    if target["item_id"].startswith(NEW_PREFIX):
+        vec = _new_vectors().get(target["item_id"])
+        if vec is None:
+            problem = _embed_pending()
+            vec = _new_vectors().get(target["item_id"])
+            if vec is None:
+                st.error(problem or "This new item could not be embedded.")
+                return
+        q, exclude = vec, None
     else:
         pos = index.position(target["item_id"])
         if pos is None or not index.valid[pos]:
@@ -710,7 +797,7 @@ def _run_search(target, mode, k, thr, allowed, use_bm25, hybrid):
         if any(v != "unreviewed" for v in old["decisions"].values()) or (ss.store and ss.store["features"]):
             ss.archived_reviews.append({"reason": "A new search replaced the candidate set.", "task_review": old,
                                         "store": ss.store, "search_target": old["target_id"]})
-            ss.notice = "The previous task and feature review was archived (available in Exports)."
+            ss.notice = "The previous task and feature review was archived (see Feature Spaces and Exports)."
         ss.task_review, ss.store = None, None
         bump_store()
     ss.search = {"target": target, "results": results, "mode": mode, "k": k, "threshold": thr,
@@ -776,7 +863,7 @@ def _results_export():
 # =========================================================================== Decomposition
 
 def page_decomposition():
-    st.header("3 · Target task, sibling confirmation and feature decomposition")
+    st.subheader("3 · Target task, sibling confirmation and feature decomposition")
     require_records()
     if not ss.search:
         st.info("Run a search first.")
@@ -792,7 +879,7 @@ def page_decomposition():
     st.subheader("Step 1 · Target task")
     llm_blocked = not mock_mode() and not (ss.consent_llm and ss.get("llm_model"))
     if llm_blocked:
-        st.caption("OpenAI analysis needs a model ID and consent in **Data & API**.")
+        st.caption("OpenAI analysis needs a model ID and consent in **Import**.")
     if st.button("Propose target task and candidate alignment", disabled=llm_blocked,
                  help=f"Sends the target and {len(cand_ids)} retrieved candidate(s)."):
         try:
@@ -1125,7 +1212,7 @@ def _add_remove_tools(store, reviewer, sib, target, active, label):
 # =========================================================================== Distractors
 
 def page_distractors():
-    st.header("4 · Distractor review")
+    st.subheader("4 · Distractor review")
     require_records()
     if not ss.search:
         st.info("Run a search and confirm siblings first.")
@@ -1158,7 +1245,7 @@ def page_distractors():
 # =========================================================================== Feature spaces
 
 def page_spaces():
-    st.header("5 · Feature space library")
+    st.subheader("5 · Feature space library")
     require_records()
     spaces = sl.collect_spaces(ss.task_review, ss.store, ss.archived_reviews, records_by_id())
     if not spaces:
@@ -1185,7 +1272,7 @@ def page_spaces():
 # =========================================================================== Visualization
 
 def page_visualization():
-    st.header("6 · Embedding and feature visualization")
+    st.subheader("6 · Embedding and feature visualization")
     require_records()
     require_index()
     by_id = records_by_id()
@@ -1259,10 +1346,10 @@ def page_visualization():
 # =========================================================================== Difficulty
 
 def page_difficulty():
-    st.header("7 · Difficulty heuristic")
+    st.subheader("7 · Difficulty heuristic")
     require_records()
     if not ss.mapping.difficulty:
-        st.info("Map an empirical difficulty column (for example Rasch b) in **Data & API** to use this section. "
+        st.info("Map an empirical difficulty column (for example Rasch b) in **Import** to use this section. "
                 "A classical p-value is never substituted for difficulty.")
         return
     require_index()
@@ -1310,11 +1397,11 @@ def page_difficulty():
 # =========================================================================== Classification
 
 def page_classification():
-    st.header("8 · Classification heuristic")
+    st.subheader("8 · Classification heuristic")
     require_records()
     roles = [r for r in ("domain", "task", "category") if getattr(ss.mapping, r)]
     if not roles:
-        st.info("Map a domain, task or category column in **Data & API** to use this section.")
+        st.info("Map a domain, task or category column in **Import** to use this section.")
         return
     require_index()
     role_labels = {r: f"{r} ({getattr(ss.mapping, r)})" for r in roles}
@@ -1376,7 +1463,7 @@ def page_classification():
 # =========================================================================== Enemies
 
 def page_enemies():
-    st.header("9 · Enemy-item candidates")
+    st.subheader("9 · Enemy-item candidates")
     require_records()
     st.warning("Every flag is a candidate for SME review. Similarity alone never establishes an enemy pair or an exposure risk.")
     scope_opts = ["Whole bank"] + (["Target and retrieved candidates"] if ss.search else [])
@@ -1430,6 +1517,7 @@ def review_state():
         s["results"] = ss.search["results"].to_dict("records")
     return {"task_review": ss.task_review, "store": ss.store, "enemy_decisions": ss.enemy_decisions,
             "class_overrides": ss.class_overrides, "search": s, "archived_reviews": ss.archived_reviews,
+            "new_items": ss.new_items["records"],
             "settings": {"mode": ss.llm_mode, "llm_model": ss.get("llm_model"), "embed_model": ss.get("embed_model")}}
 
 
@@ -1461,7 +1549,7 @@ def evidence_rows():
 
 
 def page_exports():
-    st.header("10 · Exports")
+    st.subheader("10 · Exports")
     require_records()
     st.caption("Exports never contain API keys. Text cells that could run as spreadsheet formulas are neutralised.")
     by_id = records_by_id()
@@ -1469,7 +1557,7 @@ def page_exports():
     c1.download_button("Unique items (CSV)", storage.to_csv_bytes(ingest.records_frame(ss.records)), "unique_items.csv", "text/csv", width="stretch")
     c2.download_button("Project bundle (.zip)", storage.export_bundle(ss.records, ss.mapping, ss.index, review_state(), ss.file_name),
                        "item_analytics_project.zip", "application/zip", width="stretch",
-                       help="Records, mapping, vectors with their manifest, and reviews. Re-import from Data & API.")
+                       help="Records, mapping, vectors with their manifest, and reviews. Re-import from Import → Bank import.")
     if ss.search:
         c3.download_button("Search results (CSV)", storage.to_csv_bytes(_results_export()), "search_results.csv", "text/csv", width="stretch")
     if ss.store and ss.search:
@@ -1507,6 +1595,6 @@ def page_exports():
         st.caption(f"{len(ss.archived_reviews)} archived review set(s) are included in the bundle and the JSON export.")
 
 
-PAGES = dict(zip(SECTIONS, [page_data, page_search, page_decomposition, page_distractors, page_spaces, page_visualization,
+PAGES = dict(zip(SECTIONS, [page_import, page_search, page_decomposition, page_distractors, page_spaces, page_visualization,
                             page_difficulty, page_classification, page_enemies, page_exports]))
 PAGES[section]()

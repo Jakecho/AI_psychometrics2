@@ -12,7 +12,7 @@ import src.retrieval
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = str(ROOT / "app.py")
-SECTIONS = ["Data & API", "Search", "Decomposition", "Distractors", "Feature Spaces", "Embedding Visualization",
+SECTIONS = ["Import", "Search", "Decomposition", "Distractors", "Feature Spaces", "Embedding Visualization",
             "Difficulty", "Classification", "Enemy Candidates", "Exports"]
 
 
@@ -170,29 +170,47 @@ def test_sme_adds_and_removes_space_elements_in_the_app():
     assert len(shown) and set(shown["task"]) == {"Prioritize the first action"} and "removed" not in set(shown["status"])
 
 
-def test_query_file_dropdown_and_batch_search():
+def test_new_items_from_excel_dropdown_and_batch_search():
     from src import ingest
     at = load_demo(new_app())
-    queries = ingest.read_table((ROOT / "samples" / "synthetic_queries.xlsx").read_bytes(), "synthetic_queries.xlsx")
-    at.session_state["query_df"] = queries
-    at.session_state["query_name"] = "synthetic_queries.xlsx"
+    at.session_state["ni_df"] = ingest.read_table((ROOT / "samples" / "synthetic_queries.xlsx").read_bytes(), "q.xlsx")
+    at.session_state["ni_name"] = "synthetic_queries.xlsx"
+    at.radio(key="ni_how").set_value("Excel / CSV file").run()
+    assert next(m for m in at.multiselect if m.label.startswith("Text columns")).value == ["vignette", "stem"]
+    click(at, "Add 4 items")
+    ni = at.session_state["new_items"]
+    assert [r["item_id"] for r in ni["records"]] == ["NEW:QX-1", "NEW:QX-2", "NEW:QX-3", "NEW:QX-4"]
+    assert set(ni["vectors"]) == {"NEW:QX-1", "NEW:QX-2", "NEW:QX-3", "NEW:QX-4"}  # embedded on add (mock)
     goto(at, "Search")
-    at.radio(key="target_source").set_value("Query file (CSV/XLSX)").run()
-    assert not at.exception
-    assert next(m for m in at.multiselect if m.label.startswith("Query text columns")).value == ["vignette", "stem"]
-    click(at, "Use these columns")
-    assert [r["item_id"] for r in at.session_state["query_set"]["records"]] == ["Q:QX-1", "Q:QX-2", "Q:QX-3", "Q:QX-4"]
-    click(at, "Embed 4 query item(s)")
-    assert at.session_state["query_set"]["vectors"].shape[0] == 4
-    at.selectbox(key="query_pick").set_value("Q:QX-2").run()
+    at.radio(key="target_source").set_value("New item").run()
+    at.selectbox(key="new_pick").set_value("NEW:QX-2").run()
     click(at, "Search")
     search = at.session_state["search"]
-    assert search["target"]["item_id"] == "Q:QX-2" and search["target"]["source_item_id"] == "QX-2"
-    assert len(search["results"]) == 5 and not search["results"]["item_id"].str.startswith("Q:").any()
-    click(at, "Search all 4 queries")
+    assert search["target"]["item_id"] == "NEW:QX-2" and search["target"]["source_item_id"] == "QX-2"
+    assert len(search["results"]) == 5 and not search["results"]["item_id"].str.startswith("NEW:").any()
+    click(at, "Search all 4 new items")
     batch = at.session_state["query_batch"]["table"]
-    assert sorted(batch["query_id"].unique()) == ["QX-1", "QX-2", "QX-3", "QX-4"]
-    assert batch.groupby("query_id")["item_id"].count().eq(5).all()
+    assert sorted(batch["new_item_id"].unique()) == ["QX-1", "QX-2", "QX-3", "QX-4"]
+    assert batch.groupby("new_item_id")["item_id"].count().eq(5).all()
     goto(at, "Decomposition")
     click(at, "Propose target task and candidate alignment")
-    assert at.session_state["task_review"]["target_id"] == "Q:QX-2"
+    assert at.session_state["task_review"]["target_id"] == "NEW:QX-2"
+
+
+def test_typed_new_items_accumulate_and_can_be_removed():
+    at = load_demo(new_app())
+    for text in ("A client has low blood pressure and confusion. Which action is first?",
+                 "A client with diabetes asks about sick-day rules. Which statement shows understanding?"):
+        at.text_area(key="ni_text").input(text)
+        click(at, "Add item")
+    ni = at.session_state["new_items"]
+    assert [r["item_id"] for r in ni["records"]] == ["NEW:T001", "NEW:T002"] and len(ni["vectors"]) == 2
+    next(m for m in at.multiselect if m.label == "Remove new items").set_value(["NEW:T001"]).run()
+    click(at, "Remove")
+    assert [r["item_id"] for r in at.session_state["new_items"]["records"]] == ["NEW:T002"]
+    goto(at, "Search")
+    at.radio(key="target_source").set_value("New item").run()
+    click(at, "Search")
+    assert at.session_state["search"]["target"]["item_id"] == "NEW:T002"
+
+
