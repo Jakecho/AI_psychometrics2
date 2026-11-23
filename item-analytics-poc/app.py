@@ -72,6 +72,15 @@ def md(text):
     return _MD_SPECIAL.sub(r"\\\1", str(text if text is not None else ""))
 
 
+def main_columns(ratio=(1, 1.3)):
+    """The two-column main panel: controls on the left, results and review on the right."""
+    return st.columns(list(ratio), gap="large")
+
+
+def step(title):
+    st.markdown(f"###### {title}")
+
+
 def records_by_id():
     return {r["item_id"]: r for r in ss.records or []}
 
@@ -124,8 +133,8 @@ def save_session_space(review, store, target, sib, as_new=False):
 
 def save_controls(review, store, target, sib, key):
     link = store.get("db_link")
-    a, b, c = st.columns([2, 1, 1], vertical_alignment="bottom")
-    a.text_input("Workspace (library name)", key="db_workspace", help="Groups spaces in the database. Not an access control.")
+    st.text_input("Workspace (library name)", key="db_workspace", help="Groups spaces in the database. Not an access control.")
+    b, c = st.columns(2)
     if b.button("Update saved space" if link else "Save to database", type="primary", key=f"save_{key}", width="stretch"):
         save_session_space(review, store, target, sib)
     if link and c.button("Save as new space", key=f"saveas_{key}", width="stretch"):
@@ -229,7 +238,7 @@ def invalidate_for_new_data(reason):
 
 # =========================================================================== sidebar & status
 
-st.markdown("<style>.block-container{padding-top:2.2rem;padding-bottom:2rem}"
+st.markdown("<style>.block-container{padding-top:3.4rem;padding-bottom:2rem}"
             "h3{margin-bottom:.2rem} div[data-testid='stExpander'] details summary p{font-size:.92rem}</style>",
             unsafe_allow_html=True)
 
@@ -272,25 +281,47 @@ if ss.stale_notice:
 
 def page_import():
     st.subheader("1 · Import")
-    bank_tab, new_tab, api_tab = st.tabs(["Bank import", "New items", "API & embeddings"])
-    with bank_tab:
-        _bank_import()
-    with new_tab:
-        _new_items_panel()
-    with api_tab:
-        if ss.records:
-            _api_and_embeddings()
-        else:
-            st.info("Import a bank first.")
+    left, right = main_columns((1, 1.1))
+    with left:
+        bank_tab, new_tab, api_tab = st.tabs(["Bank import", "New items", "API & embeddings"])
+        with bank_tab:
+            _bank_import()
+        with new_tab:
+            _new_items_panel()
+        with api_tab:
+            if ss.records:
+                _api_and_embeddings()
+            else:
+                st.info("Import a bank first.")
+    with right:
+        _import_overview()
 
+
+def _import_overview():
+    if ss.raw_df is None:
+        step("Preview")
+        st.caption("The bank summary, item previews and new items appear here once a bank is loaded.")
+        return
+    df = ss.raw_df
+    step(f"Bank · {ss.file_name}")
+    with st.expander(f"Schema and raw preview · {len(df)} rows · {len(df.columns)} columns"):
+        st.dataframe(ingest.profile_columns(df), hide_index=True, width="stretch")
+        st.dataframe(df, hide_index=True, width="stretch", height=240)
+    if ss.records:
+        _report()
+    else:
+        st.caption("Apply the column mapping to build normalized items.")
+    if ss.new_items["records"]:
+        step(f"New items · {len(ss.new_items['records'])}")
+        _new_items_table()
 
 def _bank_import():
-    c1, c2 = st.columns([3, 1], vertical_alignment="center")
+    upload = st.file_uploader("Item bank (.csv or .xlsx, up to 1,000 items)", type=["csv", "xlsx", "xls"])
+    c1, c2 = st.columns(2)
     with c1:
-        upload = st.file_uploader("Item bank (.csv or .xlsx, up to 1,000 items)", type=["csv", "xlsx", "xls"])
-    with c2:
         if st.button("Load synthetic demo bank", help="12 invented items for demonstration only.", width="stretch"):
             _load_bytes(SAMPLE.read_bytes(), SAMPLE.name)
+    with c2:
         with st.popover("Import project bundle", width="stretch"):
             bundle = st.file_uploader("Project bundle (.zip)", type=["zip"], key="bundle_upload")
             if bundle is not None and st.button("Import bundle"):
@@ -317,13 +348,7 @@ def _bank_import():
     if ss.raw_df is None:
         st.caption("Upload a bank, load the synthetic demo bank, or import a project bundle.")
         return
-    df = ss.raw_df
-    with st.expander(f"Schema and preview — {ss.file_name} · {len(df)} rows · {len(df.columns)} columns"):
-        st.dataframe(ingest.profile_columns(df), hide_index=True, width="stretch")
-        st.dataframe(df, hide_index=True, width="stretch", height=240)
-    _mapping_form(df)
-    if ss.records:
-        _report()
+    _mapping_form(ss.raw_df)
 
 
 def _load_bytes(data, name, sheet=None):
@@ -386,11 +411,10 @@ def _mapping_form(df):
     cols = list(df.columns)
     with st.form("mapping_form"):
         st.markdown("**Column mapping**")
-        a, b = st.columns(2)
-        text_cols = a.multiselect("Text columns to embed (in this order)", cols, default=[c for c in m.text_columns if c in cols],
+        text_cols = st.multiselect("Text columns to embed (in this order)", cols, default=[c for c in m.text_columns if c in cols],
                                   key="map_text", help="Default: vignette, stem and lead-in. The key and labels are never embedded by default.")
-        option_cols = b.multiselect("Answer option columns (any number)", cols, default=[c for c in m.option_columns if c in cols], key="map_opts")
-        grid = st.columns(4)
+        option_cols = st.multiselect("Answer option columns (any number)", cols, default=[c for c in m.option_columns if c in cols], key="map_opts")
+        grid = st.columns(2)
         picks = {}
         roles = [("item_id", "Item ID"), ("key", "Answer key"), ("domain", "Domain"), ("task", "Task"),
                  ("category", "Category / blueprint"), ("difficulty", "Difficulty (e.g. Rasch b)"),
@@ -399,11 +423,10 @@ def _mapping_form(df):
                  ("scale_group", "Scale / calibration group")]
         for n, (role, label) in enumerate(roles):
             options, idx = _opt(cols, getattr(m, role))
-            picks[role] = grid[n % 4].selectbox(label, options, index=idx, key=f"map_{role}")
-        a, b = st.columns(2)
-        categorical = a.multiselect("Treat these numeric-looking columns as categorical", cols,
+            picks[role] = grid[n % 2].selectbox(label, options, index=idx, key=f"map_{role}")
+        categorical = st.multiselect("Treat these numeric-looking columns as categorical", cols,
                                     default=[c for c, t in m.type_overrides.items() if t == "categorical"], key="map_cat")
-        include_opts = b.toggle("Include option text in the embedded text", value=m.include_options_in_embed, key="map_inc",
+        include_opts = st.toggle("Include option text in the embedded text", value=m.include_options_in_embed, key="map_inc",
                                 help="Increases lexical overlap and can surface answer-option leakage. The key marker is never embedded.")
         submitted = st.form_submit_button("Apply mapping", type="primary")
     if not submitted:
@@ -556,8 +579,8 @@ def _new_items_panel():
     if how == "Typing text":
         with st.form("ni_text_form", clear_on_submit=True):
             text = st.text_area("Item text (vignette, stem and lead-in, or any description of the task)", height=110, key="ni_text")
-            a, b, c = st.columns([3, 1, 1])
-            opts = a.text_area("Options (optional, one per line: 'A. text')", height=90, key="ni_opts")
+            opts = st.text_area("Options (optional, one per line: 'A. text')", height=90, key="ni_opts")
+            b, c = st.columns(2)
             key = b.text_input("Key (optional)", key="ni_key")
             given = c.text_input("ID (optional)", key="ni_id")
             if st.form_submit_button("Add item", type="primary"):
@@ -567,7 +590,8 @@ def _new_items_panel():
                     _add_new_items([_typed_item(text, opts, key, given)])
     else:
         _new_items_file()
-    _new_items_table()
+    if ss.new_items["records"]:
+        st.caption(f"{len(ss.new_items['records'])} new item(s) — listed on the right.")
 
 
 def _new_items_file():
@@ -598,10 +622,10 @@ def _new_items_file():
     bank_text = [c for c in ss.mapping.text_columns if c in cols]
     with st.form("ni_map_form"):
         st.caption(f"{ss.ni_name or 'File'} · {len(df)} rows · {len(cols)} columns")
-        a, b = st.columns(2)
-        text_cols = a.multiselect("Text columns (in this order)", cols, default=bank_text or guess.text_columns)
-        opt_cols = b.multiselect("Option columns (optional)", cols, default=guess.option_columns)
-        c1, c2, c3, c4 = st.columns(4)
+        text_cols = st.multiselect("Text columns (in this order)", cols, default=bank_text or guess.text_columns)
+        opt_cols = st.multiselect("Option columns (optional)", cols, default=guess.option_columns)
+        c1, c2 = st.columns(2)
+        c3, c4 = st.columns(2)
         ids, idx = _opt(cols, guess.item_id)
         id_col = c1.selectbox("ID column", ids, index=idx)
         keys, kidx = _opt(cols, guess.key)
@@ -743,52 +767,61 @@ def page_search():
     require_index()
     by_id = records_by_id()
     ni = ss.new_items
-    a, b = st.columns([1, 3], vertical_alignment="bottom")
-    source = a.radio("Target", ["Bank item", "New item"], horizontal=True, key="target_source")
-    target = None
-    with b:
+    left, right = main_columns((1, 1.35))
+    with left:
+        step("Target")
+        source = st.radio("Target", ["Bank item", "New item"], horizontal=True, key="target_source", label_visibility="collapsed")
+        target = None
         if source == "Bank item":
             tid = st.selectbox("Bank item", [r["item_id"] for r in ss.records], key="target_pick",
-                               format_func=lambda i: f"{i} — {viz._preview(by_id[i], 90)}")
+                               format_func=lambda i: f"{i} — {viz._preview(by_id[i], 70)}")
             target = by_id[tid]
         elif not ni["records"]:
             st.info("No new items yet — add them in **Import → New items** (typed text or an Excel/CSV file).")
         else:
             by_new = {r["item_id"]: r for r in ni["records"]}
             vecs = _new_vectors()
-            labels = {i: f"{i[len(NEW_PREFIX):]}{'' if i in vecs else ' (not embedded)'} — {viz._preview(r, 80)}"
+            labels = {i: f"{i[len(NEW_PREFIX):]}{'' if i in vecs else ' (not embedded)'} — {viz._preview(r, 60)}"
                       for i, r in by_new.items()}
             nid = st.selectbox(f"New item ({len(by_new)})", list(by_new), key="new_pick", format_func=labels.get)
             target = by_new[nid]
-    c1, c2, c3, c4 = st.columns([2, 1, 2, 2], vertical_alignment="bottom")
-    mode = c1.radio("Filter", ["Top K", "Minimum cosine similarity", "Both"], key="search_mode", horizontal=True)
-    k = c2.number_input("Top K", 1, max(1, len(ss.records)), min(5, len(ss.records)), key="search_k",
-                        help="Counts unique items, never options.")
-    thr = c3.slider("Minimum cosine similarity", -1.0, 1.0, rt.DEFAULT_THRESHOLD, 0.01, key="search_thr",
-                    help="0.85 is an illustrative, adjustable heuristic — not a probability and not proof of the same task.")
-    with c4.popover("Metadata filter · keyword ranking", width="stretch"):
-        meta_cols = [NONE] + list(ss.records[0]["metadata"].keys())
-        fcol = st.selectbox("Restrict candidates by metadata column", meta_cols, key="search_fcol")
-        allowed = None
-        if fcol != NONE:
-            values = sorted({str(r["metadata"].get(fcol)) for r in ss.records})
-            chosen = st.multiselect("Allowed values", values, default=values, key="search_fvals")
-            allowed = [r["item_id"] for r in ss.records if str(r["metadata"].get(fcol)) in chosen]
-            st.caption(f"{len(allowed)} candidate items match this filter.")
-        use_bm25 = st.checkbox("Add BM25 keyword scores (secondary)", key="search_bm25")
-        hybrid = st.checkbox("Rank by RRF fusion of cosine and BM25 ranks", key="search_hybrid", disabled=not use_bm25,
-                             help="RRF is a rank-fusion measure, not a similarity. Any threshold still applies to cosine only.")
-    mode_key = {"Top K": "top_k", "Minimum cosine similarity": "threshold", "Both": "both"}[mode]
-    b1, b2, _ = st.columns([1, 1.4, 3])
-    if b1.button("Search", type="primary", disabled=target is None, width="stretch"):
-        _run_search(target, mode_key, int(k), float(thr), allowed, use_bm25, hybrid)
-    embedded_new = [r for r in ni["records"] if r["item_id"] in _new_vectors()]
-    if source == "New item" and embedded_new:
-        if b2.button(f"Search all {len(embedded_new)} new items", width="stretch"):
-            _batch_search(embedded_new, mode_key, int(k), float(thr), allowed)
-        _show_batch()
-    _show_search()
-
+        step("Filter")
+        mode = st.radio("Filter", ["Top K", "Minimum cosine similarity", "Both"], key="search_mode", horizontal=True,
+                        label_visibility="collapsed")
+        c2, c3 = st.columns([1, 2], vertical_alignment="bottom")
+        k = c2.number_input("Top K", 1, max(1, len(ss.records)), min(5, len(ss.records)), key="search_k",
+                            help="Counts unique items, never options.")
+        thr = c3.slider("Minimum cosine similarity", -1.0, 1.0, rt.DEFAULT_THRESHOLD, 0.01, key="search_thr",
+                        help="0.85 is an illustrative, adjustable heuristic — not a probability and not proof of the same task.")
+        with st.popover("Metadata filter · keyword ranking", width="stretch"):
+            meta_cols = [NONE] + list(ss.records[0]["metadata"].keys())
+            fcol = st.selectbox("Restrict candidates by metadata column", meta_cols, key="search_fcol")
+            allowed = None
+            if fcol != NONE:
+                values = sorted({str(r["metadata"].get(fcol)) for r in ss.records})
+                chosen = st.multiselect("Allowed values", values, default=values, key="search_fvals")
+                allowed = [r["item_id"] for r in ss.records if str(r["metadata"].get(fcol)) in chosen]
+                st.caption(f"{len(allowed)} candidate items match this filter.")
+            use_bm25 = st.checkbox("Add BM25 keyword scores (secondary)", key="search_bm25")
+            hybrid = st.checkbox("Rank by RRF fusion of cosine and BM25 ranks", key="search_hybrid", disabled=not use_bm25,
+                                 help="RRF is a rank-fusion measure, not a similarity. Any threshold still applies to cosine only.")
+        mode_key = {"Top K": "top_k", "Minimum cosine similarity": "threshold", "Both": "both"}[mode]
+        embedded_new = [r for r in ni["records"] if r["item_id"] in _new_vectors()]
+        b1, b2 = st.columns(2)
+        if b1.button("Search", type="primary", disabled=target is None, width="stretch"):
+            _run_search(target, mode_key, int(k), float(thr), allowed, use_bm25, hybrid)
+        if source == "New item" and embedded_new:
+            if b2.button(f"Search all {len(embedded_new)} new items", width="stretch"):
+                _batch_search(embedded_new, mode_key, int(k), float(thr), allowed)
+        if target is not None:
+            item_card(target, title=f"**Selected target · {md(target['item_id'])}**")
+    with right:
+        if source == "New item":
+            _show_batch()
+        _show_search()
+        if not ss.search and not (source == "New item" and ss.query_batch):
+            step("Results")
+            st.caption("Choose a target and click Search. Unique candidate items, with all their options, appear here.")
 
 def _batch_search(items, mode, k, thr, allowed):
     vecs = _new_vectors()
@@ -869,13 +902,10 @@ def _show_search():
         return
     by_id = records_by_id()
     res = s["results"]
-    st.subheader(f"{len(res)} unique candidate item(s)")
     label = {"top_k": f"Top {s['k']}", "threshold": f"cosine ≥ {s['threshold']:.2f}", "both": f"cosine ≥ {s['threshold']:.2f}, then top {s['k']}"}[s["mode"]]
+    step(f"{len(res)} unique candidate(s) for {s['target']['item_id']}")
     st.caption(f"Filter: {label}" + (" · RRF hybrid ranking (threshold applied to cosine)" if s["hybrid"] else "")
                + (" · metadata filter on" if s["filtered"] else ""))
-    with st.expander("Similarity distribution across thresholds"):
-        st.dataframe(rt.threshold_counts(list(s["scores"].values())), hide_index=True)
-        st.caption("Counts of items at or above each cosine value. They describe this retrieval only; they are not same-task probabilities.")
     if res.empty:
         st.warning("No items met the filter. Lower the minimum cosine similarity, raise K, or widen the metadata filter. Results are never padded.")
     else:
@@ -887,20 +917,17 @@ def _show_search():
         st.dataframe(table, hide_index=True, width="stretch",
                      column_config={"cosine_similarity": st.column_config.NumberColumn(format="%.4f"),
                                     "hybrid_score": st.column_config.NumberColumn("hybrid_score (RRF rank measure)", format="%.5f")})
-    left, right = st.columns([1, 1])
-    with left:
-        st.markdown("**Target**")
-        item_card(s["target"], title=f"**Target · {md(s['target']['item_id'])}**")
-    with right:
-        st.markdown("**Candidates**")
         for _, row in res.iterrows():
             with st.expander(f"{row['item_id']} · cosine {row['cosine_similarity']:.3f}"):
                 item_card(by_id[row["item_id"]], cosine=row["cosine_similarity"])
+    with st.expander("Similarity distribution across thresholds"):
+        st.dataframe(rt.threshold_counts(list(s["scores"].values())), hide_index=True)
+        st.caption("Counts of items at or above each cosine value. They describe this retrieval only; they are not same-task probabilities.")
     c1, c2 = st.columns(2)
-    c1.download_button("Search results (CSV)", storage.to_csv_bytes(_results_export()), "search_results.csv", "text/csv")
-    c2.download_button("Search results (JSON)", storage.to_json_bytes(_results_export().to_dict("records")), "search_results.json", "application/json")
-    st.info("Next: confirm which candidates measure the same task in **Decomposition**.")
-
+    c1.download_button("Search results (CSV)", storage.to_csv_bytes(_results_export()), "search_results.csv", "text/csv", width="stretch")
+    c2.download_button("Search results (JSON)", storage.to_json_bytes(_results_export().to_dict("records")), "search_results.json",
+                       "application/json", width="stretch")
+    st.caption("Next: confirm which candidates measure the same task in **Decomposition**.")
 
 def _results_export():
     s = ss.search
@@ -932,117 +959,121 @@ def page_decomposition():
         ss.task_review = ta.new_review(target["item_id"], cand_ids)
     review = ss.task_review
     reviewer = ss.reviewer or "anonymous"
+    left, right = main_columns((1, 1.45))
+    with left:
+        with st.expander(f"Target · {target['item_id']}", expanded=False):
+            item_card(target, title=f"**Target · {md(target['item_id'])}**")
 
-    st.subheader("Step 1 · Target task")
-    llm_blocked = not mock_mode() and not (ss.consent_llm and ss.get("llm_model"))
-    if llm_blocked:
-        st.caption("OpenAI analysis needs a model ID and consent in **Import**.")
-    if st.button("Propose target task and candidate alignment", disabled=llm_blocked,
-                 help=f"Sends the target and {len(cand_ids)} retrieved candidate(s)."):
-        try:
-            run = ta.propose_task(get_llm(), target, [(by_id[c], ss.search["scores"].get(c)) for c in cand_ids])
-        except (LLMError, em.ConsentError) as exc:
-            st.error(str(exc))
-        else:
-            ta.attach_proposal(review, run, reviewer)
-            log_usage("task", run["model"], run["usage"])
-            st.rerun()
-    alignment = ta.latest_alignment(review)
-    if review["runs"]:
-        run = review["runs"][-1]
-        prop = run["proposal"]["target_task"]
-        with st.container(border=True):
-            st.markdown(f"**Proposed task:** {md(prop['name'])}  \n**Decision/action:** {md(prop['decision_or_action'])}  \n"
-                        f"**Domain:** {md(prop['domain'])}  \n**Rationale:** {md(prop['rationale'])}")
-            for span in prop["evidence_spans"]:
-                st.caption(f"Evidence · {md(span['item_id'])} · {md(span['field'])}: “{md(span['excerpt'])}” ({span['evidence_type']})")
-            for flag in prop.get("ambiguity_flags", []):
-                st.warning(f"Ambiguity: {flag}")
-            for issue in run["issues"]:
-                st.warning(f"Validation: {issue}")
-            st.caption(f"Model: {run['model']} · {run['created_at']}")
-    if review["task"] is not None:
-        with st.form("task_form"):
-            t = review["task"]
-            name = st.text_input("Target task (cognitive demand)", t.get("name", ""))
-            action = st.text_input("Decision or action required", t.get("decision_or_action", ""))
-            domain = st.text_input("Content domain (kept separate from the task)", t.get("domain", ""))
-            rationale = st.text_area("Rationale", t.get("rationale", ""), height=80)
-            c1, c2 = st.columns(2)
-            accept = c1.form_submit_button("Accept task", type="primary")
-            reject = c2.form_submit_button("Reject task")
-        if accept or reject:
-            edits = {"name": name, "decision_or_action": action, "domain": domain, "rationale": rationale}
-            ta.set_task(review, reviewer, "accepted" if accept else "rejected", edits if accept else None)
-            st.rerun()
-        st.caption(f"Task status: **{review['task_status']}**")
-    elif not review["runs"]:
-        if st.button("Write the task manually"):
-            review["task"] = {"name": "", "decision_or_action": "", "domain": "", "rationale": "Entered by the SME."}
-            st.rerun()
-
-    st.subheader("Step 2 · Confirm same-task siblings")
-    st.caption("High cosine similarity is retrieval evidence only. Mark each candidate after comparing it with the target.")
-    for cid in cand_ids:
-        rec = by_id[cid]
-        a = alignment.get(cid)
-        with st.expander(f"{cid} · cosine {ss.search['scores'].get(cid, float('nan')):.3f} · SME: {review['decisions'][cid]}"
-                         + (f" · AI: {a['proposed_alignment']}" if a else ""), expanded=False):
-            left, right = st.columns(2)
-            with left:
-                item_card(target, title=f"**Target · {md(target['item_id'])}**")
-            with right:
-                item_card(rec)
-            if a:
-                st.markdown(f"**AI apparent task:** {md(a['apparent_task'])} · **proposal:** {a['proposed_alignment']} ({a['confidence_status']})  \n"
-                            f"**Evidence:** {md(a['evidence'])}")
-            choice = st.radio("SME decision", SME_ALIGNMENTS, index=SME_ALIGNMENTS.index(review["decisions"][cid]),
-                              key=f"align_{target['item_id']}_{cid}", horizontal=True,
-                              format_func=lambda v: v.replace("_", " "))
-            if choice != review["decisions"][cid]:
-                ta.set_decision(review, reviewer, cid, choice)
-                st.rerun()
-    include_all = st.toggle("Use all retrieved candidates as the denominator (recorded in the report)",
-                            value=review["include_all_retrieved"], key="include_all")
-    if include_all != review["include_all_retrieved"]:
-        ta.set_include_all(review, reviewer, include_all)
-        st.rerun()
-    sib = ta.accepted_siblings(review)
-    st.info(f"Denominator N = {len(sib)} distinct {'retrieved' if review['include_all_retrieved'] else 'SME-confirmed'} sibling(s)"
-            f"{': ' + ', '.join(sib) if sib else ''}. The target is reported separately and is not counted in N.")
-
-    st.subheader("Step 3 · Extract features")
-    if not ta.task_confirmed(review):
-        st.warning("Accept or edit the target task before extracting features.")
-    else:
-        payloads = dc.build_payloads(target, [by_id[i] for i in sib], review["task"])
-        st.caption(f"Sends the confirmed task, the target and {len(sib)} sibling(s) in {len(payloads)} bounded request(s). "
-                   "SME-reviewed features are never overwritten; new evidence for them waits for your confirmation.")
-        if st.button("Extract features", type="primary", disabled=llm_blocked):
-            if ss.store is None:
-                ss.store = dc.new_store()
+        step("Step 1 · Target task")
+        llm_blocked = not mock_mode() and not (ss.consent_llm and ss.get("llm_model"))
+        if llm_blocked:
+            st.caption("OpenAI analysis needs a model ID and consent in **Import**.")
+        if st.button("Propose target task and candidate alignment", disabled=llm_blocked,
+                     help=f"Sends the target and {len(cand_ids)} retrieved candidate(s)."):
             try:
-                run, result = dc.decompose(get_llm(), target, [by_id[i] for i in sib], review, ss.store, reviewer)
-            except (dc.DecompositionGateError, em.ConsentError, LLMError) as exc:
+                run = ta.propose_task(get_llm(), target, [(by_id[c], ss.search["scores"].get(c)) for c in cand_ids])
+            except (LLMError, em.ConsentError) as exc:
                 st.error(str(exc))
             else:
-                log_usage("decomposition", run["model"], run["usage"])
-                bump_store()
-                msg = f"{len(result['added'])} new, {len(result['refreshed'])} refreshed, {len(result['pending'])} awaiting your confirmation."
-                if run["errors"]:
-                    st.session_state.notice = msg + " Some chunks failed: " + "; ".join(run["errors"])
-                else:
-                    ss.notice = msg
+                ta.attach_proposal(review, run, reviewer)
+                log_usage("task", run["model"], run["usage"])
                 st.rerun()
-    if ss.store and ss.store["features"]:
-        _feature_review(target, sib)
+        alignment = ta.latest_alignment(review)
+        if review["runs"]:
+            run = review["runs"][-1]
+            prop = run["proposal"]["target_task"]
+            with st.container(border=True):
+                st.markdown(f"**Proposed task:** {md(prop['name'])}  \n**Decision/action:** {md(prop['decision_or_action'])}  \n"
+                            f"**Domain:** {md(prop['domain'])}  \n**Rationale:** {md(prop['rationale'])}")
+                for span in prop["evidence_spans"]:
+                    st.caption(f"Evidence · {md(span['item_id'])} · {md(span['field'])}: “{md(span['excerpt'])}” ({span['evidence_type']})")
+                for flag in prop.get("ambiguity_flags", []):
+                    st.warning(f"Ambiguity: {flag}")
+                for issue in run["issues"]:
+                    st.warning(f"Validation: {issue}")
+                st.caption(f"Model: {run['model']} · {run['created_at']}")
+        if review["task"] is not None:
+            with st.form("task_form"):
+                t = review["task"]
+                name = st.text_input("Target task (cognitive demand)", t.get("name", ""))
+                action = st.text_input("Decision or action required", t.get("decision_or_action", ""))
+                domain = st.text_input("Content domain (kept separate from the task)", t.get("domain", ""))
+                rationale = st.text_area("Rationale", t.get("rationale", ""), height=80)
+                c1, c2 = st.columns(2)
+                accept = c1.form_submit_button("Accept task", type="primary")
+                reject = c2.form_submit_button("Reject task")
+            if accept or reject:
+                edits = {"name": name, "decision_or_action": action, "domain": domain, "rationale": rationale}
+                ta.set_task(review, reviewer, "accepted" if accept else "rejected", edits if accept else None)
+                st.rerun()
+            st.caption(f"Task status: **{review['task_status']}**")
+        elif not review["runs"]:
+            if st.button("Write the task manually"):
+                review["task"] = {"name": "", "decision_or_action": "", "domain": "", "rationale": "Entered by the SME."}
+                st.rerun()
+
+        step("Step 2 · Confirm same-task siblings")
+        st.caption("High cosine similarity is retrieval evidence only. Mark each candidate after comparing it with the target.")
+        for cid in cand_ids:
+            rec = by_id[cid]
+            a = alignment.get(cid)
+            with st.expander(f"{cid} · cosine {ss.search['scores'].get(cid, float('nan')):.3f} · SME: {review['decisions'][cid]}"
+                             + (f" · AI: {a['proposed_alignment']}" if a else ""), expanded=False):
+                item_card(rec)
+                if a:
+                    st.markdown(f"**AI apparent task:** {md(a['apparent_task'])} · **proposal:** {a['proposed_alignment']} ({a['confidence_status']})  \n"
+                                f"**Evidence:** {md(a['evidence'])}")
+                choice = st.radio("SME decision", SME_ALIGNMENTS, index=SME_ALIGNMENTS.index(review["decisions"][cid]),
+                                  key=f"align_{target['item_id']}_{cid}", horizontal=True,
+                                  format_func=lambda v: v.replace("_", " "))
+                if choice != review["decisions"][cid]:
+                    ta.set_decision(review, reviewer, cid, choice)
+                    st.rerun()
+        include_all = st.toggle("Use all retrieved candidates as N (recorded)",
+                                value=review["include_all_retrieved"], key="include_all")
+        if include_all != review["include_all_retrieved"]:
+            ta.set_include_all(review, reviewer, include_all)
+            st.rerun()
+        sib = ta.accepted_siblings(review)
+        st.info(f"Denominator N = {len(sib)} distinct {'retrieved' if review['include_all_retrieved'] else 'SME-confirmed'} sibling(s)"
+                f"{': ' + ', '.join(sib) if sib else ''}. The target is reported separately and is not counted in N.")
+
+        step("Step 3 · Extract features")
+        if not ta.task_confirmed(review):
+            st.warning("Accept or edit the target task before extracting features.")
+        else:
+            payloads = dc.build_payloads(target, [by_id[i] for i in sib], review["task"])
+            st.caption(f"Sends the confirmed task, the target and {len(sib)} sibling(s) in {len(payloads)} bounded request(s). "
+                       "SME-reviewed features are never overwritten; new evidence for them waits for your confirmation.")
+            if st.button("Extract features", type="primary", disabled=llm_blocked):
+                if ss.store is None:
+                    ss.store = dc.new_store()
+                try:
+                    run, result = dc.decompose(get_llm(), target, [by_id[i] for i in sib], review, ss.store, reviewer)
+                except (dc.DecompositionGateError, em.ConsentError, LLMError) as exc:
+                    st.error(str(exc))
+                else:
+                    log_usage("decomposition", run["model"], run["usage"])
+                    bump_store()
+                    msg = f"{len(result['added'])} new, {len(result['refreshed'])} refreshed, {len(result['pending'])} awaiting your confirmation."
+                    if run["errors"]:
+                        st.session_state.notice = msg + " Some chunks failed: " + "; ".join(run["errors"])
+                    else:
+                        ss.notice = msg
+                    st.rerun()
+    with right:
+        if ss.store and ss.store["features"]:
+            _feature_review(target, sib)
+        else:
+            step("Step 4 · SME feature review")
+            st.caption("Confirm the task and same-task siblings, then extract features. The four spaces appear here for review.")
 
 
 def _feature_review(target, sib):
     store = ss.store
     reviewer = ss.reviewer or "anonymous"
     by_id = records_by_id()
-    st.subheader("Step 4 · SME feature review")
+    step("Step 4 · SME feature review")
     if ss.store.get("basis") and ss.store["basis"]["sibling_ids"] != sib:
         st.warning("The confirmed sibling set changed since the last extraction. Frequencies use the current set; "
                    "re-extract to propose features for newly confirmed items.")
@@ -1280,12 +1311,22 @@ def page_distractors():
     sib = ta.accepted_siblings(ss.task_review)
     by_id = records_by_id() | {target["item_id"]: target}
     table = ds.option_review(by_id, target["item_id"], sib, ss.store)
-    st.caption("All options of the target and each confirmed sibling. Only incorrect options of items with a usable key contribute distractor features.")
-    st.dataframe(table, hide_index=True, width="stretch")
-    if ss.store:
+    left, right = main_columns((1.4, 1))
+    with left:
+        step("All options of the target and confirmed siblings")
+        st.caption("Only incorrect options of items with a usable key contribute distractor features.")
+        st.dataframe(table, hide_index=True, width="stretch", height=min(620, 38 + 35 * len(table)),
+                     column_order=["item_id", "option_id", "option_text", "option_role", "linked_distractor_features",
+                                   "analysis_status", "item_role", "key_status"],
+                     column_config={"option_text": st.column_config.TextColumn(width="medium"),
+                                    "linked_distractor_features": st.column_config.TextColumn("linked features")})
+    with right:
+        step("Distractor feature space")
+        if not ss.store:
+            st.caption("Extract features in **Decomposition** to see the distractor space.")
+            return
         freq = ff.frequency_table(ss.store, sib, target["item_id"], source=ss.get("freq_source", "sme"))
         freq = freq[freq["feature_type"] == "distractor_feature"]
-        st.subheader("Distractor feature space")
         st.caption("Item frequency counts each sibling once; option count counts distinct sibling options. They use different denominators.")
         if freq.empty:
             st.caption("No distractor features on this basis yet.")
@@ -1293,13 +1334,12 @@ def page_distractors():
             st.dataframe(freq[["feature_id", "canonical_label", "item_frequency", "denominator_N", "coverage",
                                "distractor_option_count", "in_target", "review_status", "sme_importance"]],
                          hide_index=True, width="stretch")
-            hyps = [(fid, f) for fid, f in ss.store["features"].items()
-                    if f["feature_type"] == "distractor_feature" and f.get("proposed_misconception") and f["review_status"] not in ("merged", "removed")]
-            if hyps:
-                with st.expander("Misconception hypotheses (require SME verification)"):
-                    for fid, f in hyps:
-                        st.markdown(f"**{fid}** {md(f['canonical_label'])} — {md(f['proposed_misconception'])}")
-
+        hyps = [(fid, f) for fid, f in ss.store["features"].items()
+                if f["feature_type"] == "distractor_feature" and f.get("proposed_misconception") and f["review_status"] not in ("merged", "removed")]
+        if hyps:
+            with st.expander("Misconception hypotheses (require SME verification)"):
+                for fid, f in hyps:
+                    st.markdown(f"**{fid}** {md(f['canonical_label'])} — {md(f['proposed_misconception'])}")
 
 # =========================================================================== Feature spaces
 
@@ -1335,31 +1375,35 @@ def _session_spaces():
     if not spaces:
         st.info("No feature spaces yet. Build one in **Decomposition**; earlier spaces are kept here when you start a new search.")
         return
-    st.dataframe(sl.space_summary(spaces), hide_index=True, width="stretch")
-    entries = _session_space_entries()
-    if entries:
-        names = [e[0] for e in entries]
-        pick = st.selectbox("Space to save", names, key="session_save_pick",
-                            format_func=lambda n: f"{n} — {next(e for e in entries if e[0] == n)[1].get('task', {}).get('name') or '(task not confirmed)'}")
-        name, review, store, target = next(e for e in entries if e[0] == pick)
-        save_controls(review, store, target, ta.accepted_siblings(review), f"lib_{pick}")
-    with st.expander("Search elements in session spaces"):
+    left, right = main_columns((1, 1.35))
+    with left:
+        step("Spaces in this session")
+        st.dataframe(sl.space_summary(spaces), hide_index=True, width="stretch")
+        entries = _session_space_entries()
+        if entries:
+            names = [e[0] for e in entries]
+            titles = {e[0]: f"{e[0]} — {(e[1].get('task') or {}).get('name') or '(task not confirmed)'}" for e in entries}
+            pick = st.selectbox("Space to save", names, key="session_save_pick", format_func=titles.get)
+            name, review, store, target = next(e for e in entries if e[0] == pick)
+            save_controls(review, store, target, ta.accepted_siblings(review), f"lib_{pick}")
+    with right:
+        step("Search elements")
         table = sl.space_features(spaces)
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2 = st.columns(2)
         tasks = c1.multiselect("Task", sorted(table["task"].unique()) if len(table) else [], key="lib_task")
         domains = c2.multiselect("Domain", sorted(table["domain"].unique()) if len(table) else [], key="lib_domain")
-        types = c3.multiselect("Space", [FEATURE_TYPE_LABELS[t] for t in FEATURE_TYPES], key="lib_type")
-        statuses = c4.multiselect("Status", sorted(table["status"].unique()) if len(table) else [], key="lib_status")
+        c1, c2 = st.columns(2)
+        types = c1.multiselect("Space", [FEATURE_TYPE_LABELS[t] for t in FEATURE_TYPES], key="lib_type")
+        statuses = c2.multiselect("Status", sorted(table["status"].unique()) if len(table) else [], key="lib_status")
         a, b = st.columns([3, 1], vertical_alignment="bottom")
         text = a.text_input("Keyword (label, definition, task or domain)", key="lib_text")
-        include_removed = b.toggle("Include removed", key="lib_removed")
+        include_removed = b.toggle("Removed", key="lib_removed")
         shown = sl.filter_features(table, tasks, domains, types, statuses, text)
         if not include_removed:
             shown = shown[shown["status"] != "removed"]
         st.caption(f"{len(shown)} of {len(table)} elements")
         st.dataframe(shown, hide_index=True, width="stretch")
         st.download_button("Filtered elements (CSV)", storage.to_csv_bytes(shown), "session_space_elements.csv", "text/csv")
-
 
 DB_TYPE_LABELS = {t: FEATURE_TYPE_LABELS[t] for t in FEATURE_TYPES}
 
@@ -1375,48 +1419,53 @@ def _database_spaces():
     for err in st.session_state.pop("db_errors", []):
         st.error(err)
     facets = db.facets(include_deleted=True)
-    c1, c2, c3, c4 = st.columns(4)
-    ws = c1.selectbox("Workspace", ["(all)"] + facets["workspaces"], key="db_ws")
-    tasks = c2.multiselect("Task", facets["tasks"], key="db_task")
-    domains = c3.multiselect("Domain", facets["domains"], key="db_domain")
-    types = c4.multiselect("Space", list(DB_TYPE_LABELS), format_func=DB_TYPE_LABELS.get, key="db_type")
-    a, s_, b, c = st.columns([2, 1, 1, 1], vertical_alignment="bottom")
-    text = a.text_input("Keyword (label, definition, note, misconception, task or domain)", key="db_text")
-    statuses = s_.multiselect("Status", list(sdb.EDITABLE_STATUSES), key="db_status",
-                              help="For example accepted + edited for SME-approved elements only.")
-    include_removed = b.toggle("Removed elements", key="db_removed")
-    include_deleted = c.toggle("Deleted spaces", key="db_deleted")
-    workspace = None if ws == "(all)" else ws
-    spaces = db.spaces(workspace, tasks, domains, include_deleted=include_deleted)
-    if spaces.empty:
-        st.caption("No saved spaces match. Save one from **Decomposition** or the Session spaces tab.")
-    else:
-        st.dataframe(spaces, hide_index=True, width="stretch", height=min(260, 38 + 35 * len(spaces)))
-    if include_removed and statuses:
-        statuses = statuses + ["removed"]
-    elements = db.elements(workspace, tasks, domains, types, statuses or None, text, include_removed, include_deleted)
-    st.caption(f"{len(elements)} element(s). Edit cells to update; changes are saved immediately and recorded in the history.")
-    if not elements.empty:
-        _database_editor(db, elements, actor)
-    with st.expander("Remove, restore or delete"):
-        _database_actions(db, elements, spaces, actor)
-    with st.expander("Edit space details and history"):
-        _database_space_details(db, spaces, actor)
-    with st.expander("Backup and restore"):
-        st.download_button("Download library backup (JSON)", storage.to_json_bytes(db.export_json()),
-                           "space_library_backup.json", "application/json")
-        up = st.file_uploader("Restore from a backup (JSON)", type=["json"], key="db_backup_upload")
-        mode = st.radio("If a space already exists", ["skip", "replace"], horizontal=True, key="db_import_mode")
-        if up is not None and st.button("Restore backup"):
-            try:
-                counts = db.import_json(json.loads(up.getvalue()), actor, on_conflict=mode)
-            except (sdb.SpaceDBError, ValueError, sqlite3.Error) as exc:
-                st.error(f"Backup not restored: {exc}")
-            else:
-                ss.db_rev += 1
-                ss.notice = f"Backup restored: {counts['added']} added, {counts['replaced']} replaced, {counts['skipped']} skipped."
-                st.rerun()
-
+    left, right = main_columns((1, 1.45))
+    with left:
+        step("Find spaces")
+        c1, c2 = st.columns(2)
+        ws = c1.selectbox("Workspace", ["(all)"] + facets["workspaces"], key="db_ws")
+        types = c2.multiselect("Space", list(DB_TYPE_LABELS), format_func=DB_TYPE_LABELS.get, key="db_type")
+        c1, c2 = st.columns(2)
+        tasks = c1.multiselect("Task", facets["tasks"], key="db_task")
+        domains = c2.multiselect("Domain", facets["domains"], key="db_domain")
+        text = st.text_input("Keyword (label, definition, note, misconception, task or domain)", key="db_text")
+        statuses = st.multiselect("Status", list(sdb.EDITABLE_STATUSES), key="db_status",
+                                  help="For example accepted + edited for SME-approved elements only.")
+        b, c = st.columns(2)
+        include_removed = b.toggle("Removed elements", key="db_removed")
+        include_deleted = c.toggle("Deleted spaces", key="db_deleted")
+        workspace = None if ws == "(all)" else ws
+        spaces = db.spaces(workspace, tasks, domains, include_deleted=include_deleted)
+        if spaces.empty:
+            st.caption("No saved spaces match. Save one from **Decomposition** or the Session spaces tab.")
+        else:
+            st.dataframe(spaces, hide_index=True, width="stretch", height=min(260, 38 + 35 * len(spaces)))
+        if include_removed and statuses:
+            statuses = statuses + ["removed"]
+        elements = db.elements(workspace, tasks, domains, types, statuses or None, text, include_removed, include_deleted)
+        with st.expander("Remove, restore or delete"):
+            _database_actions(db, elements, spaces, actor)
+        with st.expander("Edit space details and history"):
+            _database_space_details(db, spaces, actor)
+        with st.expander("Backup and restore"):
+            st.download_button("Download library backup (JSON)", storage.to_json_bytes(db.export_json()),
+                               "space_library_backup.json", "application/json")
+            up = st.file_uploader("Restore from a backup (JSON)", type=["json"], key="db_backup_upload")
+            mode = st.radio("If a space already exists", ["skip", "replace"], horizontal=True, key="db_import_mode")
+            if up is not None and st.button("Restore backup"):
+                try:
+                    counts = db.import_json(json.loads(up.getvalue()), actor, on_conflict=mode)
+                except (sdb.SpaceDBError, ValueError, sqlite3.Error) as exc:
+                    st.error(f"Backup not restored: {exc}")
+                else:
+                    ss.db_rev += 1
+                    ss.notice = f"Backup restored: {counts['added']} added, {counts['replaced']} replaced, {counts['skipped']} skipped."
+                    st.rerun()
+    with right:
+        step(f"Elements · {len(elements)}")
+        st.caption("Edit cells to update; changes are saved immediately and recorded in the history.")
+        if not elements.empty:
+            _database_editor(db, elements, actor)
 
 def _database_editor(db, elements, actor):
     columns = ["element_id", "task", "domain", "space_type", "label", "definition", "status", "importance", "dominance",
@@ -1520,22 +1569,25 @@ def page_visualization():
     require_records()
     require_index()
     by_id = records_by_id()
-    st.caption("2D positions are projections for display. Distances in the plot are not cosine similarities; search always ranks in the original space.")
-    c1, c2, c3, c4 = st.columns(4)
-    methods = ["pca", "tsne"] + (["umap"] if viz.umap_available() else [])
-    method = c1.selectbox("Projection", methods, format_func={"pca": "PCA (fast)", "tsne": "t-SNE", "umap": "UMAP"}.get, key="viz_method")
-    seed = c2.number_input("Random seed", 0, 10_000, 42, key="viz_seed")
-    meta_cols = [NONE] + list(ss.records[0]["metadata"].keys())
-    color_by = c3.selectbox("Colour by metadata", meta_cols, key="viz_color")
-    kind = c4.radio("Colour type", ["auto", "categorical", "numeric"], horizontal=True, key="viz_kind")
-    params = {"seed": int(seed)}
-    if method == "tsne":
-        params["perplexity"] = float(st.slider("Perplexity", 2.0, 50.0, 30.0, 1.0, key="viz_perp",
-                                               help="Capped below the number of items. Cluster shape and global distances are unstable."))
+    left, right = main_columns((1, 2.2))
+    with left:
+        step("Projection")
+        methods = ["pca", "tsne"] + (["umap"] if viz.umap_available() else [])
+        method = st.selectbox("Projection", methods, format_func={"pca": "PCA (fast)", "tsne": "t-SNE", "umap": "UMAP"}.get, key="viz_method")
+        seed = st.number_input("Random seed", 0, 10_000, 42, key="viz_seed")
+        params = {"seed": int(seed)}
+        if method == "tsne":
+            params["perplexity"] = float(st.slider("Perplexity", 2.0, 50.0, 30.0, 1.0, key="viz_perp",
+                                                   help="Capped below the number of items. Cluster shape and global distances are unstable."))
+        meta_cols = [NONE] + list(ss.records[0]["metadata"].keys())
+        color_by = st.selectbox("Colour by metadata", meta_cols, key="viz_color")
+        kind = st.radio("Colour type", ["auto", "categorical", "numeric"], horizontal=True, key="viz_kind")
+        st.caption("2D positions are for display only; distances are not cosine similarities. Search always ranks in the original space.")
     try:
         coords, meta = viz.get_projection(ss.proj_cache, ss.index, method, **params)
     except viz.ProjectionUnavailable as exc:
-        st.warning(str(exc))
+        with right:
+            st.warning(str(exc))
         return
     roles = {}
     if ss.search:
@@ -1549,15 +1601,17 @@ def page_visualization():
     frame = viz.plot_frame(coords, by_id, None if color_by == NONE else color_by, roles,
                            ss.search["scores"] if ss.search else None)
     hidden = None
-    if color_by != NONE and (kind == "categorical" or (kind == "auto" and not viz.is_numeric(frame[color_by]))):
-        cats = sorted(frame[color_by].map(lambda v: "(missing)" if v is None else str(v)).unique())
-        shown = st.multiselect("Show categories", cats, default=cats, key=f"viz_cats_{color_by}")
-        hidden = [c for c in cats if c not in shown]
-    fig, used = viz.scatter_figure(frame, None if color_by == NONE else color_by, kind, hidden,
-                                   title=f"{method.upper()} projection of {len(frame)} items")
-    event = st.plotly_chart(fig, width="stretch", on_select="rerun", selection_mode="points", key="viz_chart")
-    if meta.get("explained_variance"):
-        st.caption("PCA explained variance: " + ", ".join(f"{v:.1%}" for v in meta["explained_variance"]))
+    with left:
+        if color_by != NONE and (kind == "categorical" or (kind == "auto" and not viz.is_numeric(frame[color_by]))):
+            cats = sorted(frame[color_by].map(lambda v: "(missing)" if v is None else str(v)).unique())
+            shown = st.multiselect("Show categories", cats, default=cats, key=f"viz_cats_{color_by}")
+            hidden = [c for c in cats if c not in shown]
+    with right:
+        fig, used = viz.scatter_figure(frame, None if color_by == NONE else color_by, kind, hidden,
+                                       title=f"{method.upper()} projection of {len(frame)} items")
+        event = st.plotly_chart(fig, width="stretch", on_select="rerun", selection_mode="points", key="viz_chart")
+        if meta.get("explained_variance"):
+            st.caption("PCA explained variance: " + ", ".join(f"{v:.1%}" for v in meta["explained_variance"]))
     picked = None
     try:
         points = event.selection.points if event else []
@@ -1565,27 +1619,28 @@ def page_visualization():
             picked = points[0].get("customdata", [None])[0]
     except AttributeError:
         picked = None
-    ids = list(frame["item_id"])
-    choice = st.selectbox("Item details", ids, index=ids.index(picked) if picked in ids else 0, key="viz_item")
-    item_card(by_id[choice])
-    st.download_button("Plot data (CSV)", storage.to_csv_bytes(frame), f"projection_{method}.csv", "text/csv")
-
+    with left:
+        step("Item details")
+        ids = list(frame["item_id"])
+        choice = st.selectbox("Item (or click a point)", ids, index=ids.index(picked) if picked in ids else 0, key="viz_item")
+        item_card(by_id[choice])
+        st.download_button("Plot data (CSV)", storage.to_csv_bytes(frame), f"projection_{method}.csv", "text/csv")
     if ss.store and ss.search:
-        st.subheader("Item × feature incidence")
-        target_id = ss.search["target"]["item_id"]
-        sib = ta.accepted_siblings(ss.task_review)
-        source = st.radio("Incidence", ["sme", "raw"], horizontal=True, key="heat_source",
-                          format_func=lambda v: "SME-approved" if v == "sme" else "Raw AI")
-        matrix = ff.incidence_matrix(ss.store, [target_id] + sib, source=source)
-        fig = viz.heatmap_figure(matrix, ss.store)
-        if fig is None:
-            st.caption("No features on this basis yet.")
-        else:
-            st.plotly_chart(fig, width="stretch")
-            st.caption("Rows: target then confirmed siblings. Columns grouped Declarative, Procedural, Instance, Distractor.")
-        st.download_button("Incidence (long CSV)", storage.to_csv_bytes(ff.long_incidence(ss.store, target_id, sib, source)),
-                           "item_feature_incidence.csv", "text/csv")
-
+        with right:
+            step("Item × feature incidence")
+            target_id = ss.search["target"]["item_id"]
+            sib = ta.accepted_siblings(ss.task_review)
+            source = st.radio("Incidence", ["sme", "raw"], horizontal=True, key="heat_source",
+                              format_func=lambda v: "SME-approved" if v == "sme" else "Raw AI")
+            matrix = ff.incidence_matrix(ss.store, [target_id] + sib, source=source)
+            fig = viz.heatmap_figure(matrix, ss.store)
+            if fig is None:
+                st.caption("No features on this basis yet.")
+            else:
+                st.plotly_chart(fig, width="stretch")
+                st.caption("Rows: target then confirmed siblings. Columns grouped Declarative, Procedural, Instance, Distractor.")
+            st.download_button("Incidence (long CSV)", storage.to_csv_bytes(ff.long_incidence(ss.store, target_id, sib, source)),
+                               "item_feature_incidence.csv", "text/csv")
 
 # =========================================================================== Difficulty
 
@@ -1597,46 +1652,52 @@ def page_difficulty():
                 "A classical p-value is never substituted for difficulty.")
         return
     require_index()
-    st.warning("This is a similarity-weighted neighbour average, not an IRT calibration. It needs empirical validation before any operational use.")
-    confirmed = st.checkbox(f"I confirm the values in '{ss.mapping.difficulty}' are on one calibrated, linked scale with the same direction and units",
-                            key="scale_confirmed")
-    c1, c2 = st.columns(2)
-    alpha = c1.slider("Weight exponent α (w = max(cosine, 0)^α)", 0.0, 5.0, 1.0, 0.5, key="diff_alpha")
-    min_n = c2.number_input("Minimum labelled neighbours", 1, 20, 2, key="diff_min")
-    if ss.search and not ss.search["results"].empty:
-        by_id = records_by_id()
-        res = pr.difficulty_estimate(ss.search["results"], by_id, alpha=alpha, min_neighbors=int(min_n), scale_confirmed=confirmed)
-        st.subheader(f"Target {ss.search['target']['item_id']}")
-        if res["status"] == "estimate":
-            st.metric(f"Weighted neighbour estimate ({ss.mapping.difficulty})", f"{res['estimate']:.3f}")
-        elif res["status"] == "exploratory":
-            st.info(res["message"])
+    left, right = main_columns((1, 1.3))
+    with left:
+        st.warning("This is a similarity-weighted neighbour average, not an IRT calibration. It needs empirical validation before any operational use.")
+        confirmed = st.checkbox(f"'{ss.mapping.difficulty}' is on one linked scale", key="scale_confirmed",
+                                help="Confirm the values are calibrated on one linked scale with the same direction and units.")
+        c1, c2 = st.columns(2)
+        alpha = c1.slider("Weight exponent α", 0.0, 5.0, 1.0, 0.5, key="diff_alpha", help="w = max(cosine, 0)^α")
+        min_n = c2.number_input("Minimum labelled neighbours", 1, 20, 2, key="diff_min")
+        res = None
+        if ss.search and not ss.search["results"].empty:
+            res = pr.difficulty_estimate(ss.search["results"], records_by_id(), alpha=alpha, min_neighbors=int(min_n), scale_confirmed=confirmed)
+            step(f"Target {ss.search['target']['item_id']}")
+            if res["status"] == "estimate":
+                st.metric(f"Weighted neighbour estimate ({ss.mapping.difficulty})", f"{res['estimate']:.3f}")
+            elif res["status"] == "exploratory":
+                st.info(res["message"])
+            else:
+                st.warning(res["message"])
+            if "unweighted_mean" in res:
+                st.caption(f"Descriptive: unweighted mean {res['unweighted_mean']:.3f}, SD {res['sd'] if res['sd'] is None else round(res['sd'], 3)}, "
+                           f"min {res['min']:.3f}, max {res['max']:.3f}, labelled N {res['n_labeled']} of {res['n_neighbors']} neighbours. "
+                           "The SD describes the neighbours; it is not a confidence interval.")
         else:
-            st.warning(res["message"])
-        if "unweighted_mean" in res:
-            st.caption(f"Descriptive: unweighted mean {res['unweighted_mean']:.3f}, SD {res['sd'] if res['sd'] is None else round(res['sd'], 3)}, "
-                       f"min {res['min']:.3f}, max {res['max']:.3f}, labelled N {res['n_labeled']} of {res['n_neighbors']} neighbours. "
-                       "The SD describes the neighbours; it is not a confidence interval.")
-        st.dataframe(res["table"], hide_index=True, width="stretch")
-    else:
-        st.info("Run a search to see neighbour difficulties for a target.")
-    st.subheader("Grouped holdout diagnostics")
-    st.caption("Each labelled item is predicted only from items outside its linked family or near-duplicate group, against a naive mean baseline.")
-    k = st.number_input("Neighbours (k)", 1, 50, 5, key="diff_k")
-    if st.button("Run holdout evaluation", disabled=not confirmed):
-        out = pr.evaluate_difficulty(ss.index, ss.records, k=int(k), alpha=alpha, min_neighbors=int(min_n))
-        if out["status"] != "ok":
-            st.warning(out["message"])
-        else:
-            st.dataframe(out["summary"], hide_index=True)
-            st.caption(f"{out['n_evaluated']} items evaluated across {out['n_groups']} groups; {out['n_abstained']} abstained. {out['message']}")
-            if out["per_domain"] is not None:
-                st.dataframe(out["per_domain"], hide_index=True)
-            with st.expander("Per-item predictions"):
-                st.dataframe(out["table"], hide_index=True, width="stretch")
-    if not confirmed:
-        st.caption("Holdout evaluation is available after you confirm scale comparability.")
-
+            st.info("Run a search to see neighbour difficulties for a target.")
+        step("Grouped holdout diagnostics")
+        st.caption("Each labelled item is predicted only from items outside its linked family or near-duplicate group, against a naive mean baseline.")
+        k = st.number_input("Neighbours (k)", 1, 50, 5, key="diff_k")
+        run = st.button("Run holdout evaluation", disabled=not confirmed)
+        if not confirmed:
+            st.caption("Holdout evaluation is available after you confirm scale comparability.")
+    with right:
+        if res is not None:
+            step("Neighbours")
+            st.dataframe(res["table"], hide_index=True, width="stretch")
+        if run:
+            out = pr.evaluate_difficulty(ss.index, ss.records, k=int(k), alpha=alpha, min_neighbors=int(min_n))
+            step("Holdout results")
+            if out["status"] != "ok":
+                st.warning(out["message"])
+            else:
+                st.dataframe(out["summary"], hide_index=True, width="stretch")
+                st.caption(f"{out['n_evaluated']} items evaluated across {out['n_groups']} groups; {out['n_abstained']} abstained. {out['message']}")
+                if out["per_domain"] is not None:
+                    st.dataframe(out["per_domain"], hide_index=True, width="stretch")
+                with st.expander("Per-item predictions"):
+                    st.dataframe(out["table"], hide_index=True, width="stretch")
 
 # =========================================================================== Classification
 
@@ -1648,109 +1709,125 @@ def page_classification():
         st.info("Map a domain, task or category column in **Import** to use this section.")
         return
     require_index()
-    role_labels = {r: f"{r} ({getattr(ss.mapping, r)})" for r in roles}
-    role = st.selectbox("Label to predict", roles, format_func=role_labels.get, key="cls_role")
-    warning = pr.label_leakage_warning(ss.mapping, role)
-    if warning:
-        st.warning(warning)
-    st.caption("Predict only within one shared taxonomy. Domain and task are kept separate. The model never overwrites supplied labels.")
-    c1, c2 = st.columns(2)
-    margin = c1.slider("Abstain when the top two labels are within", 0.0, 0.5, 0.1, 0.05, key="cls_margin")
-    min_n = c2.number_input("Minimum labelled neighbours", 1, 20, 2, key="cls_min")
-    if ss.search and not ss.search["results"].empty:
-        target = ss.search["target"]
-        res = pr.classify(ss.search["results"], records_by_id(), role=role, min_labeled=int(min_n), margin=margin)
-        st.subheader(f"Target {target['item_id']}")
-        given = target.get("roles", {}).get(role)
-        if given:
-            st.caption(f"Supplied label: {md(given)} (kept as the label of record).")
-        if res["status"] == "prediction":
-            st.metric("Suggested label", res["prediction"])
+    left, right = main_columns((1, 1.3))
+    with left:
+        role_labels = {r: f"{r} ({getattr(ss.mapping, r)})" for r in roles}
+        role = st.selectbox("Label to predict", roles, format_func=role_labels.get, key="cls_role")
+        warning = pr.label_leakage_warning(ss.mapping, role)
+        if warning:
+            st.warning(warning)
+        st.caption("Predict only within one shared taxonomy. Domain and task are kept separate. The model never overwrites supplied labels.")
+        c1, c2 = st.columns(2)
+        margin = c1.slider("Abstain margin", 0.0, 0.5, 0.1, 0.05, key="cls_margin", help="Abstain when the top two labels are within this support margin.")
+        min_n = c2.number_input("Minimum labelled neighbours", 1, 20, 2, key="cls_min")
+        res = None
+        if ss.search and not ss.search["results"].empty:
+            target = ss.search["target"]
+            res = pr.classify(ss.search["results"], records_by_id(), role=role, min_labeled=int(min_n), margin=margin)
+            step(f"Target {target['item_id']}")
+            given = target.get("roles", {}).get(role)
+            if given:
+                st.caption(f"Supplied label: {md(given)} (kept as the label of record).")
+            if res["status"] == "prediction":
+                st.metric("Suggested label", res["prediction"])
+            else:
+                st.info(res["message"])
+            options = sorted({lab for r in ss.records for lab in pr.split_labels(r["roles"].get(role))})
+            with st.form("cls_override"):
+                choice = st.selectbox("SME label decision", ["(no decision)"] + options, key="cls_choice")
+                note = st.text_input("Note")
+                if st.form_submit_button("Record decision") and choice != "(no decision)":
+                    ss.class_overrides[f"{target['item_id']}|{role}"] = {"label": choice, "note": note, "reviewer": ss.reviewer or "anonymous",
+                                                                         "suggested": res["prediction"], "status": res["status"]}
+                    st.rerun()
+            rec = ss.class_overrides.get(f"{target['item_id']}|{role}")
+            if rec:
+                st.success(f"SME decision recorded: {rec['label']} (suggestion was {rec['suggested'] or 'abstain'}).")
         else:
-            st.info(res["message"])
-        if res["support"] is not None:
-            st.dataframe(res["support"], hide_index=True)
-        st.dataframe(res["table"], hide_index=True, width="stretch")
-        options = sorted({lab for r in ss.records for lab in pr.split_labels(r["roles"].get(role))})
-        with st.form("cls_override"):
-            choice = st.selectbox("SME label decision", ["(no decision)"] + options, key="cls_choice")
-            note = st.text_input("Note")
-            if st.form_submit_button("Record decision") and choice != "(no decision)":
-                ss.class_overrides[f"{target['item_id']}|{role}"] = {"label": choice, "note": note, "reviewer": ss.reviewer or "anonymous",
-                                                                     "suggested": res["prediction"], "status": res["status"]}
-                st.rerun()
-        rec = ss.class_overrides.get(f"{target['item_id']}|{role}")
-        if rec:
-            st.success(f"SME decision recorded: {rec['label']} (suggestion was {rec['suggested'] or 'abstain'}).")
-    else:
-        st.info("Run a search to classify a target from its neighbours.")
-    st.subheader("Grouped holdout diagnostics")
-    k = st.number_input("Neighbours (k)", 1, 50, 5, key="cls_k")
-    if st.button("Run holdout evaluation", key="cls_eval"):
-        out = pr.evaluate_classification(ss.index, ss.records, role=role, k=int(k), min_labeled=int(min_n), margin=margin)
-        if out["status"] not in ("ok",):
-            st.warning(out.get("message", out["status"]))
-        else:
-            c = st.columns(3)
-            c[0].metric("Accuracy (decided)", f"{out['accuracy']:.2f}")
-            c[1].metric("Balanced accuracy", f"{out['balanced_accuracy']:.2f}")
-            c[2].metric("Macro-F1", f"{out['macro_f1']:.2f}")
-            st.caption(f"{out['n_abstained']} abstained · {out['n_multi_label_skipped']} multi-label items skipped. {out['message']}")
-            st.dataframe(out["confusion"], width="stretch")
-            st.dataframe(out["per_class_recall"], hide_index=True)
-            st.dataframe(out["class_counts"], hide_index=True)
-            if not out["misclassified"].empty:
-                with st.expander("Misclassified items"):
-                    st.dataframe(out["misclassified"], hide_index=True)
-
+            st.info("Run a search to classify a target from its neighbours.")
+        step("Grouped holdout diagnostics")
+        k = st.number_input("Neighbours (k)", 1, 50, 5, key="cls_k")
+        run = st.button("Run holdout evaluation", key="cls_eval")
+    with right:
+        if res is not None:
+            step("Neighbour support")
+            if res["support"] is not None:
+                st.dataframe(res["support"], hide_index=True, width="stretch")
+            st.dataframe(res["table"], hide_index=True, width="stretch")
+        if run:
+            out = pr.evaluate_classification(ss.index, ss.records, role=role, k=int(k), min_labeled=int(min_n), margin=margin)
+            step("Holdout results")
+            if out["status"] not in ("ok",):
+                st.warning(out.get("message", out["status"]))
+            else:
+                c = st.columns(3)
+                c[0].metric("Accuracy (decided)", f"{out['accuracy']:.2f}")
+                c[1].metric("Balanced accuracy", f"{out['balanced_accuracy']:.2f}")
+                c[2].metric("Macro-F1", f"{out['macro_f1']:.2f}")
+                st.caption(f"{out['n_abstained']} abstained · {out['n_multi_label_skipped']} multi-label items skipped. {out['message']}")
+                st.dataframe(out["confusion"], width="stretch")
+                a, b = st.columns(2)
+                a.dataframe(out["per_class_recall"], hide_index=True, width="stretch")
+                b.dataframe(out["class_counts"], hide_index=True, width="stretch")
+                if not out["misclassified"].empty:
+                    with st.expander("Misclassified items"):
+                        st.dataframe(out["misclassified"], hide_index=True)
 
 # =========================================================================== Enemies
 
 def page_enemies():
     st.subheader("9 · Enemy-item candidates")
     require_records()
-    st.warning("Every flag is a candidate for SME review. Similarity alone never establishes an enemy pair or an exposure risk.")
-    scope_opts = ["Whole bank"] + (["Target and retrieved candidates"] if ss.search else [])
-    scope = st.radio("Scope", scope_opts, horizontal=True, key="enemy_scope")
-    c = st.columns(4)
-    cos_t = c[0].number_input("High cosine ≥", 0.0, 1.0, en.DEFAULTS["cos_threshold"], 0.01, key="en_cos")
-    stem_t = c[1].number_input("Stem token overlap ≥", 0.0, 1.0, en.DEFAULTS["stem_jaccard"], 0.05, key="en_stem")
-    opt_t = c[2].number_input("Option-set overlap ≥", 0.0, 1.0, en.DEFAULTS["option_jaccard"], 0.05, key="en_opt")
-    val_t = c[3].number_input("Shared precise values ≥", 1, 10, en.DEFAULTS["shared_values_min"], key="en_val")
-    if st.button("Screen for candidates", type="primary"):
-        ids = None
-        if scope != "Whole bank":
-            ids = [ss.search["target"]["item_id"]] + list(ss.search["results"]["item_id"])
-        try:
-            ss.enemy_table = en.enemy_candidates(ss.records, ss.index, ids, cos_threshold=cos_t, stem_jaccard=stem_t,
-                                                 option_jaccard=opt_t, shared_values_min=int(val_t))
-        except ValueError as exc:
-            st.error(str(exc))
+    left, right = main_columns((1, 1.6))
+    with left:
+        st.warning("Every flag is a candidate for SME review. Similarity alone never establishes an enemy pair or an exposure risk.")
+        scope_opts = ["Whole bank"] + (["Target and retrieved candidates"] if ss.search else [])
+        scope = st.radio("Scope", scope_opts, horizontal=True, key="enemy_scope")
+        c = st.columns(2)
+        cos_t = c[0].number_input("High cosine ≥", 0.0, 1.0, en.DEFAULTS["cos_threshold"], 0.01, key="en_cos")
+        stem_t = c[1].number_input("Stem token overlap ≥", 0.0, 1.0, en.DEFAULTS["stem_jaccard"], 0.05, key="en_stem")
+        c = st.columns(2)
+        opt_t = c[0].number_input("Option-set overlap ≥", 0.0, 1.0, en.DEFAULTS["option_jaccard"], 0.05, key="en_opt")
+        val_t = c[1].number_input("Shared precise values ≥", 1, 10, en.DEFAULTS["shared_values_min"], key="en_val")
+        if st.button("Screen for candidates", type="primary"):
+            ids = None
+            if scope != "Whole bank":
+                ids = [ss.search["target"]["item_id"]] + list(ss.search["results"]["item_id"])
+            try:
+                ss.enemy_table = en.enemy_candidates(ss.records, ss.index, ids, cos_threshold=cos_t, stem_jaccard=stem_t,
+                                                     option_jaccard=opt_t, shared_values_min=int(val_t))
+            except ValueError as exc:
+                st.error(str(exc))
     table = ss.enemy_table
-    if table is None:
-        return
-    if table.empty:
-        st.info("No pairs met any rule at these settings.")
-        return
-    table = table.copy()
-    table["sme_decision"] = table["pair_id"].map(lambda p: ss.enemy_decisions.get(p, {}).get("decision", "unreviewed"))
-    st.dataframe(table, hide_index=True, width="stretch")
-    with st.form("enemy_decision"):
-        pair = st.selectbox("Pair", list(table["pair_id"]))
-        decision = st.selectbox("SME decision", en.ENEMY_DECISIONS, format_func=lambda v: v.replace("_", " "))
-        note = st.text_input("Note")
-        if st.form_submit_button("Record decision"):
-            en.record_decision(ss.enemy_decisions, pair, decision, ss.reviewer, note)
-            st.rerun()
-    pick = st.selectbox("Compare pair side by side", list(table["pair_id"]), key="enemy_view")
-    by_id = records_by_id()
-    ia, ib = pick.split("|", 1)
-    a, b = st.columns(2)
-    with a:
-        item_card(by_id[ia])
-    with b:
-        item_card(by_id[ib])
-
+    with right:
+        if table is None:
+            step("Candidate pairs")
+            st.caption("Set the rules and click Screen for candidates.")
+            return
+        if table.empty:
+            st.info("No pairs met any rule at these settings.")
+            return
+        table = table.copy()
+        table["sme_decision"] = table["pair_id"].map(lambda p: ss.enemy_decisions.get(p, {}).get("decision", "unreviewed"))
+        step(f"Candidate pairs · {len(table)}")
+        st.dataframe(table, hide_index=True, width="stretch")
+        pick = st.selectbox("Compare pair side by side", list(table["pair_id"]), key="enemy_view")
+        by_id = records_by_id()
+        ia, ib = pick.split("|", 1)
+        a, b = st.columns(2)
+        with a:
+            item_card(by_id[ia])
+        with b:
+            item_card(by_id[ib])
+    with left:
+        step("SME decision")
+        with st.form("enemy_decision"):
+            pair = st.selectbox("Pair", list(table["pair_id"]), index=list(table["pair_id"]).index(pick))
+            decision = st.selectbox("SME decision", en.ENEMY_DECISIONS, format_func=lambda v: v.replace("_", " "))
+            note = st.text_input("Note")
+            if st.form_submit_button("Record decision"):
+                en.record_decision(ss.enemy_decisions, pair, decision, ss.reviewer, note)
+                st.rerun()
 
 # =========================================================================== Exports
 
@@ -1797,47 +1874,51 @@ def page_exports():
     require_records()
     st.caption("Exports never contain API keys. Text cells that could run as spreadsheet formulas are neutralised.")
     by_id = records_by_id()
-    c1, c2, c3 = st.columns(3)
-    c1.download_button("Unique items (CSV)", storage.to_csv_bytes(ingest.records_frame(ss.records)), "unique_items.csv", "text/csv", width="stretch")
-    c2.download_button("Project bundle (.zip)", storage.export_bundle(ss.records, ss.mapping, ss.index, review_state(), ss.file_name),
-                       "item_analytics_project.zip", "application/zip", width="stretch",
-                       help="Records, mapping, vectors with their manifest, and reviews. Re-import from Import → Bank import.")
-    if ss.search:
-        c3.download_button("Search results (CSV)", storage.to_csv_bytes(_results_export()), "search_results.csv", "text/csv", width="stretch")
-    if ss.store and ss.search:
-        target_id = ss.search["target"]["item_id"]
-        sib = ta.accepted_siblings(ss.task_review)
-        sheets = {
-            "features": feature_rows(),
-            "frequency_sme": ff.frequency_table(ss.store, sib, target_id, "sme"),
-            "frequency_raw": ff.frequency_table(ss.store, sib, target_id, "raw"),
-            "incidence_long": ff.long_incidence(ss.store, target_id, sib, "sme"),
-            "evidence_map": evidence_rows(),
-            "options": ds.option_review(by_id | {target_id: ss.search["target"]}, target_id, sib, ss.store),
-            "task_review": pd.DataFrame([{"target_id": target_id, "task_status": ss.task_review["task_status"],
-                                          "include_all_retrieved": ss.task_review["include_all_retrieved"],
-                                          "denominator_N": len(sib), **(ss.task_review["task"] or {})}]),
-            "candidate_decisions": pd.DataFrame([{"item_id": k, "sme_decision": v} for k, v in ss.task_review["decisions"].items()]),
-            "audit_history": pd.DataFrame([{k: (json.dumps(v, default=str) if isinstance(v, (dict, list)) else v) for k, v in h.items()}
-                                           for h in ss.task_review["history"] + ss.store["history"]]),
-        }
-        d1, d2, d3 = st.columns(3)
-        d1.download_button("Reviewed features (XLSX)", storage.to_excel_bytes(sheets), "reviewed_features.xlsx",
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
-        d2.download_button("Reviewed features (CSV)", storage.to_csv_bytes(sheets["features"]), "reviewed_features.csv", "text/csv", width="stretch")
-        d3.download_button("Item-feature incidence (CSV)", storage.to_csv_bytes(sheets["incidence_long"]), "item_feature_incidence.csv", "text/csv", width="stretch")
-        st.download_button("Raw model runs and reviews (JSON)", storage.to_json_bytes(review_state()), "review_state.json", "application/json")
-    if ss.enemy_table is not None and not ss.enemy_table.empty:
-        t = ss.enemy_table.copy()
-        t["sme_decision"] = t["pair_id"].map(lambda p: ss.enemy_decisions.get(p, {}).get("decision", "unreviewed"))
-        st.download_button("Enemy candidates and decisions (CSV)", storage.to_csv_bytes(t), "enemy_candidates.csv", "text/csv")
-    spaces = sl.collect_spaces(ss.task_review, ss.store, ss.archived_reviews, by_id)
-    if spaces:
-        st.download_button("Feature space library — all spaces (CSV)", storage.to_csv_bytes(sl.space_features(spaces)),
-                           "feature_space_library.csv", "text/csv")
-    if ss.archived_reviews:
-        st.caption(f"{len(ss.archived_reviews)} archived review set(s) are included in the bundle and the JSON export.")
-
+    left, right = main_columns((1, 1))
+    with left:
+        step("Data and search")
+        st.download_button("Unique items (CSV)", storage.to_csv_bytes(ingest.records_frame(ss.records)), "unique_items.csv", "text/csv", width="stretch")
+        st.download_button("Project bundle (.zip)", storage.export_bundle(ss.records, ss.mapping, ss.index, review_state(), ss.file_name),
+                           "item_analytics_project.zip", "application/zip", width="stretch",
+                           help="Records, mapping, vectors with their manifest, and reviews. Re-import from Import → Bank import.")
+        if ss.search:
+            st.download_button("Search results (CSV)", storage.to_csv_bytes(_results_export()), "search_results.csv", "text/csv", width="stretch")
+        if ss.enemy_table is not None and not ss.enemy_table.empty:
+            t = ss.enemy_table.copy()
+            t["sme_decision"] = t["pair_id"].map(lambda p: ss.enemy_decisions.get(p, {}).get("decision", "unreviewed"))
+            st.download_button("Enemy candidates and decisions (CSV)", storage.to_csv_bytes(t), "enemy_candidates.csv", "text/csv", width="stretch")
+    with right:
+        step("Reviews and spaces")
+        if ss.store and ss.search:
+            target_id = ss.search["target"]["item_id"]
+            sib = ta.accepted_siblings(ss.task_review)
+            sheets = {
+                "features": feature_rows(),
+                "frequency_sme": ff.frequency_table(ss.store, sib, target_id, "sme"),
+                "frequency_raw": ff.frequency_table(ss.store, sib, target_id, "raw"),
+                "incidence_long": ff.long_incidence(ss.store, target_id, sib, "sme"),
+                "evidence_map": evidence_rows(),
+                "options": ds.option_review(by_id | {target_id: ss.search["target"]}, target_id, sib, ss.store),
+                "task_review": pd.DataFrame([{"target_id": target_id, "task_status": ss.task_review["task_status"],
+                                              "include_all_retrieved": ss.task_review["include_all_retrieved"],
+                                              "denominator_N": len(sib), **(ss.task_review["task"] or {})}]),
+                "candidate_decisions": pd.DataFrame([{"item_id": k, "sme_decision": v} for k, v in ss.task_review["decisions"].items()]),
+                "audit_history": pd.DataFrame([{k: (json.dumps(v, default=str) if isinstance(v, (dict, list)) else v) for k, v in h.items()}
+                                               for h in ss.task_review["history"] + ss.store["history"]]),
+            }
+            st.download_button("Reviewed features (XLSX)", storage.to_excel_bytes(sheets), "reviewed_features.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
+            st.download_button("Reviewed features (CSV)", storage.to_csv_bytes(sheets["features"]), "reviewed_features.csv", "text/csv", width="stretch")
+            st.download_button("Item-feature incidence (CSV)", storage.to_csv_bytes(sheets["incidence_long"]), "item_feature_incidence.csv", "text/csv", width="stretch")
+            st.download_button("Raw model runs and reviews (JSON)", storage.to_json_bytes(review_state()), "review_state.json", "application/json", width="stretch")
+        else:
+            st.caption("Feature review exports appear after a decomposition.")
+        spaces = sl.collect_spaces(ss.task_review, ss.store, ss.archived_reviews, by_id)
+        if spaces:
+            st.download_button("Feature space library — session spaces (CSV)", storage.to_csv_bytes(sl.space_features(spaces)),
+                               "feature_space_library.csv", "text/csv", width="stretch")
+        if ss.archived_reviews:
+            st.caption(f"{len(ss.archived_reviews)} archived review set(s) are included in the bundle and the JSON export.")
 
 PAGES = dict(zip(SECTIONS, [page_import, page_search, page_decomposition, page_distractors, page_spaces, page_visualization,
                             page_difficulty, page_classification, page_enemies, page_exports]))

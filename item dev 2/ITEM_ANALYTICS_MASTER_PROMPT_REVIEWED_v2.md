@@ -370,6 +370,7 @@ Create a polished, responsive app with sidebar and main workflow:
 - Visualization: PCA/t-SNE/UMAP selector, metadata color dropdown, category filters, target/sibling highlighting, hover/click details, item-feature heatmap, optional network.
 - Status dashboard: file name, N items, N embedded, embedding model/dims, API readiness, N retrieved, N accepted, N features, percentage SME-reviewed; clear warnings about ephemeral storage and API cost.
 - Export center: results CSV/JSON, reviewed feature mapping CSV/XLSX, item-feature incidence CSV, dataset/embedding project bundle, plot export when practical.
+- **Two-column main panel (v2.2).** Below a full-width status line and section heading, every section uses two columns: the left holds controls and the workflow (import and mapping, target and filters, task and sibling steps, settings and decision forms), and the right holds results and review (previews, result tables and candidate cards, the feature review, plots, holdout results, the database editor). Keep labels and buttons readable in the narrower column (no truncated button text), and use the wider column for tables.
 - Keep the layout compact but not busy: a one-line status summary instead of large metric cards, secondary settings in expanders or popovers, filters on one row, and previews collapsed by default.
 - Use keyboard-accessible controls, readable color palettes, color-independent markers for target vs siblings, and functional empty states.
 

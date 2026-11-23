@@ -71,6 +71,7 @@ The suite covers the spec's acceptance checks with synthetic data. It uses mocke
 - **Mockable adapters.** OpenAI is imported lazily behind `OpenAIEmbedder` and `OpenAIStructuredLLM` (Responses API, strict JSON schema, `store: false`). Both refuse to run without consent.
 - **Evidence you can verify.** `explicit_text` spans must quote the cited field or option verbatim. `clinically_inferred` spans need an item reference and a reasoning rationale, and any quote they give must be real. Unverifiable support is removed and the feature is routed to SME adjudication.
 - **The SME controls the result.** Each feature keeps an immutable copy of the original AI proposal. An SME-touched feature is never overwritten: new evidence from a rerun waits for explicit confirmation. A new search, changed mapping or re-embedding archives earlier reviews and never deletes them.
+- **Layout.** Each section has a two-column main panel: controls and workflow on the left, results and review on the right, under a one-line status bar.
 - **Isolation.** All user data lives in `st.session_state`. No `st.cache_data` or `st.cache_resource` is used. Projections are cached per session, keyed by embedding fingerprint, method, parameters and seed.
 
 ## Simulated role-based review (not a human review)
