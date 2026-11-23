@@ -230,15 +230,33 @@ def generate_embeddings(records, embedder, model, dimensions, settings_fingerpri
     )
 
 
+def embed_queries(texts, embedder, index, batch_size=64, sleep=time.sleep):
+    """Embed several query texts with the same model and dimensions as the index.
+
+    Returns (unit vectors, valid mask, tokens). Queries are not added to the index.
+    """
+    texts = list(texts)
+    if not texts or any(not (t or "").strip() for t in texts):
+        raise EmbeddingError("Every query needs text.")
+    dims = index.dimensions if index.model == MOCK_MODEL else index.requested_dimensions
+    parts, tokens = [], 0
+    for start in range(0, len(texts), batch_size):
+        chunk = texts[start:start + batch_size]
+        vectors, used = call_with_retries(lambda: embedder.embed(chunk, model=index.model, dimensions=dims), sleep=sleep)
+        vectors = np.asarray(vectors, dtype=np.float32)
+        if vectors.ndim != 2 or vectors.shape != (len(chunk), index.dimensions):
+            raise EmbeddingError("The query embedding dimension does not match the index. Regenerate embeddings.")
+        parts.append(vectors)
+        tokens += int(used or 0)
+    vec, valid = l2_normalize(np.vstack(parts))
+    return vec, valid, tokens
+
+
 def embed_query(text, embedder, index):
     """Embed free text with the same model and dimensions as the index."""
     if not text.strip():
         raise EmbeddingError("Enter query text.")
-    dims = index.dimensions if index.model == MOCK_MODEL else index.requested_dimensions
-    vectors, _ = embedder.embed([text], model=index.model, dimensions=dims)
-    vec, valid = l2_normalize(np.asarray(vectors, dtype=np.float32))
-    if vec.shape[1] != index.dimensions:
-        raise EmbeddingError("The query embedding dimension does not match the index. Regenerate embeddings.")
+    vec, valid, _ = embed_queries([text], embedder, index)
     if not valid[0]:
         raise EmbeddingError("The query produced a zero vector.")
     return vec[0]

@@ -166,7 +166,7 @@ def profile_columns(df):
 
 
 _ROLE_PATTERNS = {
-    "item_id": r"^(item[_ ]?id|id|item|question[_ ]?id|qid)$",
+    "item_id": r"^(item[_ ]?id|id|item|question[_ ]?id|qid|query[_ ]?id|query)$",
     "key": r"^(key|answer|correct([_ ]?(answer|option|key))?|answer[_ ]?key)$",
     "domain": r"^(domain|content[_ ]?domain|area)$",
     "task": r"^(task|target[_ ]?task|competency)$",

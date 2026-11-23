@@ -93,3 +93,23 @@ def test_bundle_reimport_detects_mismatch(sample_bank, sample_index):
     changed[0] = {**changed[0], "embed_text_hash": "different"}
     with pytest.raises(storage.BundleError, match="different items or embedding text"):
         storage.import_bundle(bundle, current_records=changed)
+
+
+def test_query_batches_use_index_model_and_validate_dimensions(sample_index):
+    texts = ["first query about fluids", "second query about teaching", "third query"]
+    calls = []
+
+    class Recording(em.MockEmbedder):
+        def embed(self, batch, model=None, dimensions=None):
+            calls.append((len(batch), model, dimensions))
+            return super().embed(batch, model, dimensions)
+
+    vecs, valid, tokens = em.embed_queries(texts, Recording(), sample_index, batch_size=2)
+    assert vecs.shape == (3, sample_index.dimensions) and valid.all() and tokens > 0
+    assert calls == [(2, em.MOCK_MODEL, 256), (1, em.MOCK_MODEL, 256)]
+    assert np.allclose(vecs[0], em.embed_query(texts[0], em.MockEmbedder(), sample_index))
+    with pytest.raises(em.EmbeddingError, match="needs text"):
+        em.embed_queries(["ok", "  "], em.MockEmbedder(), sample_index)
+    with pytest.raises(em.EmbeddingError, match="dimension"):
+        other = em.EmbeddingIndex(**{**sample_index.__dict__, "model": "other-model", "requested_dimensions": None})
+        em.embed_queries(["ok"], em.MockEmbedder(dimensions=8), other)

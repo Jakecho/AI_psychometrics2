@@ -1,7 +1,7 @@
 # MASTER IMPLEMENTATION PROMPT v2 — Reviewed for Engineering, Psychometrics & SME Practice
 
 **Review status:** Cross-role specification review completed 2026-11-22; this is a revised *implementation specification*, not an implemented application.  
-**Amendment v2.1 (2026-11-22):** SME add/remove of elements in the key-feature, instance and distractor spaces (§2.5–2.6, §9, §12, §14 checks 27–28) and a feature-space library searchable by task or domain (§2.13, §12, §14 check 29). A reference implementation lives in `item-analytics-poc/`.  
+**Amendment v2.1 (2026-11-22):** SME add/remove of elements in the key-feature, instance and distractor spaces (§2.5–2.6, §9, §12, §14 checks 27–28) and a feature-space library searchable by task or domain (§2.13, §12, §14 check 29), and multi-query input from a CSV/XLSX query file with a per-query dropdown and batch search (§7, §12, §14 check 30). A reference implementation lives in `item-analytics-poc/`.  
 **Intended executor:** Claude Code, OpenAI Codex, or a comparable autonomous coding agent.  
 **Artifact type:** Executable implementation specification and acceptance contract, **not** a user-facing essay.  
 **Target:** Streamlit Community Cloud, local VS Code, or other small Python hosting environment.  
@@ -178,6 +178,8 @@ After unit normalization, score is `embeddings @ query_unit_vector`, and is theo
 
 **Primary/default:** exact cosine similarity. Support query by arbitrary input text, a selected existing item (same original embedding), or an item not in the uploaded bank with optional options. When querying by an existing item, exclude self-match by exact internal item ID. Always show the target separate from retrieved candidates.
 
+**Query inputs (v2.1).** Offer three target sources: (1) an item from the bank, (2) a typed free-text query for semantic search, and (3) a **query file** (CSV/XLSX, sheet selectable) containing multiple query items. Map query-file columns like the bank (text columns in order, optional ID, options and key), preselecting columns whose names match the bank's embedded text columns, and build query text with the bank's template so queries and items share one embedding space. Embed all query items once, on an explicit action that is gated by the embedding consent, using the bank index's model and dimensions; keep the query vectors in the session, never add queries to the bank index, and invalidate them when the bank's embedding basis changes. Give query IDs a distinct namespace (for example `Q:`) so they cannot collide with bank IDs. After import, a **dropdown** selects one query item to search; selecting another query must not trigger a new API call. Provide **Search all queries** that applies the current filter (Top K / minimum cosine / both, metadata filter) to every query and returns a long table (`query_id, rank, item_id, cosine_similarity, domain, task, note`) with CSV export; queries with no qualifying items are listed with a note rather than dropped. A query-file item can continue into task confirmation and decomposition like any other target and is excluded from the sibling denominator.
+
 Search filters:
 - `Top K`: highest-scoring K **unique item IDs** (not K options; K defaults to 5; do not return > N).
 - `Cosine threshold`: all unique items with `similarity >= threshold`, default example 0.85.
@@ -344,7 +346,7 @@ Create a polished, responsive app with sidebar and main workflow:
 
 - Sidebar: **Data & API**, **Search**, **Decomposition**, **Distractors**, **Feature Spaces**, **Embedding Visualization**, **Difficulty**, **Classification**, **Enemy Candidates**, **Exports**. Use either `st.tabs` or a small navigation menu; avoid losing state when navigating.
 - Data pane: drag-drop upload, multi-sheet choice, schema auto-detection, all-column preview, map input text and metadata, ID/key/options, stats and warning banners; explicit **Build Embeddings** button.
-- Search pane: target item from uploaded bank or pasted text, cosine-first, Top K/threshold/both, optional keyword toggle, clear result counts, deduplicated table and complete option cards; submit button.
+- Search pane: target item from uploaded bank, typed query text, or an imported query file with a per-query dropdown and batch search; cosine-first, Top K/threshold/both, optional keyword toggle, clear result counts, deduplicated table and complete option cards; submit button.
 - Task pane: task suggestion with source evidence, edit/confirm, and each sibling candidate checkbox/tri-state status before feature extraction.
 - Feature pane: no feature count limit; four categorized panels, feature frequency with denominator, supporting IDs, multi-option distractor references, evidence text, dropdown importance rating 1–5, status/edit tools, procedural dominant/alternative selector, an **Add an element to a space** form (space selector: declarative key feature, procedural key feature, instance feature, distractor candidate) and a **Remove or restore elements** panel.
 - Feature Spaces pane: per-space summary table and a filterable element table (task, domain, space type, status, keyword; removed elements hidden by default), with CSV export.
@@ -408,6 +410,7 @@ Write real `pytest` unit tests, API-mocked integration tests, and at least one S
 27. The SME adds one element to each of the four spaces. A quote missing from any selected item, a key/instance element with neither quote nor rationale, a distractor citing the keyed option or an item without a usable key, and an unknown option are each refused. Accepted additions carry origin `sme`, appear in SME-approved frequency, and are absent from raw AI incidence.
 28. Removing an element excludes it from SME-approved frequency and distractor option links; re-running extraction that proposes it again leaves it removed with a pending update; Restore returns its prior status; removal and restore appear in the audit history and survive bundle export/import.
 29. With a current and an archived space for different tasks and domains, the Feature Spaces table filters correctly by task, by domain, by space type, by status and by keyword; per-space counts and the removed count are correct; coverage uses each space's own denominator.
+30. Import a query file with four synthetic queries whose text columns share the bank's names: columns are preselected, query IDs are namespaced, one embedding action embeds all four with the bank's model, the dropdown searches a chosen query without re-embedding, batch search returns at most K unique bank items per query (never query items), and the chosen query proceeds to task proposal as the target.
 
 ### Suggested synthetic demonstration
 

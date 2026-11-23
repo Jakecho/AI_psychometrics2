@@ -168,3 +168,31 @@ def test_sme_adds_and_removes_space_elements_in_the_app():
     assert not at.exception
     shown = at.dataframe[-1].value
     assert len(shown) and set(shown["task"]) == {"Prioritize the first action"} and "removed" not in set(shown["status"])
+
+
+def test_query_file_dropdown_and_batch_search():
+    from src import ingest
+    at = load_demo(new_app())
+    queries = ingest.read_table((ROOT / "samples" / "synthetic_queries.xlsx").read_bytes(), "synthetic_queries.xlsx")
+    at.session_state["query_df"] = queries
+    at.session_state["query_name"] = "synthetic_queries.xlsx"
+    goto(at, "Search")
+    at.radio(key="target_source").set_value("Query file (CSV/XLSX)").run()
+    assert not at.exception
+    assert next(m for m in at.multiselect if m.label.startswith("Query text columns")).value == ["vignette", "stem"]
+    click(at, "Use these columns")
+    assert [r["item_id"] for r in at.session_state["query_set"]["records"]] == ["Q:QX-1", "Q:QX-2", "Q:QX-3", "Q:QX-4"]
+    click(at, "Embed 4 query item(s)")
+    assert at.session_state["query_set"]["vectors"].shape[0] == 4
+    at.selectbox(key="query_pick").set_value("Q:QX-2").run()
+    click(at, "Search")
+    search = at.session_state["search"]
+    assert search["target"]["item_id"] == "Q:QX-2" and search["target"]["source_item_id"] == "QX-2"
+    assert len(search["results"]) == 5 and not search["results"]["item_id"].str.startswith("Q:").any()
+    click(at, "Search all 4 queries")
+    batch = at.session_state["query_batch"]["table"]
+    assert sorted(batch["query_id"].unique()) == ["QX-1", "QX-2", "QX-3", "QX-4"]
+    assert batch.groupby("query_id")["item_id"].count().eq(5).all()
+    goto(at, "Decomposition")
+    click(at, "Propose target task and candidate alignment")
+    assert at.session_state["task_review"]["target_id"] == "Q:QX-2"

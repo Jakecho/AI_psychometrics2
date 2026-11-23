@@ -46,6 +46,7 @@ DEFAULTS = {
     "usage_log": [], "archived_reviews": [], "stale_notice": None, "notice": None, "store_rev": 0,
     "llm_mode": "Offline mock (no network)", "consent_embed": False, "consent_llm": False,
     "api_key_input": "", "embed_model": em.DEFAULT_MODEL, "embed_dims": 0, "llm_model": "",
+    "query_df": None, "query_name": None, "query_hash": None, "query_set": None, "query_batch": None,
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
@@ -467,15 +468,18 @@ def page_search():
     require_index()
     by_id = records_by_id()
     st.caption("Ranking is exact cosine similarity in the original embedding space. Keyword ranking is optional and secondary.")
-    source = st.radio("Target", ["Item from the bank", "New item text"], horizontal=True, key="target_source")
+    source = st.radio("Target", ["Item from the bank", "Type a query", "Query file (CSV/XLSX)"], horizontal=True,
+                      key="target_source", help="A typed query or query-file items are embedded with the bank's model; they are not added to the bank.")
     target = None
     if source == "Item from the bank":
         ids = [r["item_id"] for r in ss.records]
         tid = st.selectbox("Target item", ids, key="target_pick",
                            format_func=lambda i: f"{i} — {viz._preview(by_id[i], 80)}")
         target = by_id[tid]
+    elif source == "Query file (CSV/XLSX)":
+        target = _query_file_panel()
     else:
-        text = st.text_area("Target item text (vignette, stem and lead-in)", key="new_text", height=120)
+        text = st.text_area("Query text for semantic search (an item, a stem, or any description of the task)", key="new_text", height=120)
         opts = st.text_area("Options (optional, one per line, e.g. 'A. option text')", key="new_opts", height=100)
         key = st.text_input("Key (optional option ID)", key="new_key")
         target = _new_target(text, opts, key)
@@ -496,10 +500,154 @@ def page_search():
         use_bm25 = st.checkbox("Add BM25 keyword scores (secondary)", key="search_bm25")
         hybrid = st.checkbox("Rank by RRF fusion of cosine and BM25 ranks", key="search_hybrid", disabled=not use_bm25,
                              help="RRF is a rank-fusion measure, not a similarity. Any threshold still applies to cosine only.")
-    if st.button("Search", type="primary", disabled=target is None):
-        _run_search(target, {"Top K": "top_k", "Minimum cosine similarity": "threshold", "Both": "both"}[mode],
-                    int(k), float(thr), allowed, use_bm25, hybrid)
+    mode_key = {"Top K": "top_k", "Minimum cosine similarity": "threshold", "Both": "both"}[mode]
+    b1, b2 = st.columns([1, 3])
+    if b1.button("Search", type="primary", disabled=target is None):
+        _run_search(target, mode_key, int(k), float(thr), allowed, use_bm25, hybrid)
+    if source == "Query file (CSV/XLSX)" and _query_vectors() is not None:
+        if b2.button(f"Search all {len(ss.query_set['records'])} queries"):
+            _batch_search(mode_key, int(k), float(thr), allowed)
+        _show_batch()
     _show_search()
+
+
+QUERY_PREFIX = "Q:"
+
+
+def _mode_mismatch(index):
+    if index.model == em.MOCK_MODEL and not mock_mode():
+        return "These vectors were built in mock mode. Switch to mock mode or regenerate embeddings with OpenAI."
+    if index.model != em.MOCK_MODEL and mock_mode():
+        return "These vectors were built with OpenAI. Switch to OpenAI mode to embed queries with the same model."
+    return None
+
+
+def _query_vectors():
+    """Stored query vectors, only while they match the current bank index."""
+    qs = ss.query_set
+    if not qs or qs.get("vectors") is None or ss.index is None:
+        return None
+    return qs["vectors"] if qs["basis"] == (ss.index.model, ss.index.requested_dimensions, ss.index.settings_fingerprint) else None
+
+
+def _query_file_panel():
+    upload = st.file_uploader("Query file — one row per query item (.csv or .xlsx)", type=["csv", "xlsx", "xls"], key="query_upload")
+    if upload is not None:
+        data = upload.getvalue()
+        h = hashlib.sha256(data).hexdigest()
+        try:
+            sheets = ingest.list_sheets(data, upload.name)
+        except ingest.IngestError as exc:
+            st.error(str(exc))
+            sheets = []
+        sheet = st.selectbox("Worksheet", sheets, key="query_sheet") if len(sheets) > 1 else (sheets[0] if sheets else None)
+        if (h, sheet) != ss.query_hash and st.button("Load query file"):
+            try:
+                df = ingest.read_table(data, upload.name, sheet)
+            except ingest.IngestError as exc:
+                st.error(str(exc))
+            else:
+                ss.query_df, ss.query_name, ss.query_hash = df, upload.name, (h, sheet)
+                ss.query_set, ss.query_batch = None, None
+                st.rerun()
+    df = ss.query_df
+    if df is None:
+        st.caption("Columns are mapped like the bank. Matching column names (for example vignette and stem) are selected automatically.")
+        return None
+    cols = list(df.columns)
+    guess = ingest.detect_mapping(df)
+    bank_text = [c for c in ss.mapping.text_columns if c in cols]
+    with st.form("query_map_form"):
+        st.caption(f"{ss.query_name or 'Query file'} · {len(df)} rows · {len(cols)} columns")
+        text_cols = st.multiselect("Query text columns (in this order)", cols, default=bank_text or guess.text_columns)
+        c1, c2, c3 = st.columns(3)
+        ids, idx = _opt(cols, guess.item_id)
+        id_col = c1.selectbox("Query ID column", ids, index=idx)
+        opt_cols = c2.multiselect("Option columns (optional)", cols, default=guess.option_columns)
+        keys, kidx = _opt(cols, guess.key)
+        key_col = c3.selectbox("Key column (optional)", keys, index=kidx)
+        if st.form_submit_button("Use these columns", type="primary"):
+            mapping = ingest.ColumnMapping(item_id=None if id_col == NONE else id_col, text_columns=text_cols,
+                                           option_columns=opt_cols, key=None if key_col == NONE else key_col,
+                                           domain=guess.domain, task=guess.task,
+                                           include_options_in_embed=ss.mapping.include_options_in_embed)
+            try:
+                records, report = ingest.build_records(df, mapping)
+            except ingest.IngestError as exc:
+                st.error(str(exc))
+            else:
+                for r in records:
+                    r["source_item_id"] = r["item_id"]
+                    r["item_id"] = r["internal_id"] = f"{QUERY_PREFIX}{r['item_id']}"
+                ss.query_set = {"records": records, "report": report, "vectors": None, "valid": None, "basis": None,
+                                "name": ss.query_name}
+                ss.query_batch = None
+                st.rerun()
+    qs = ss.query_set
+    if not qs:
+        return None
+    if qs["report"]["skipped_empty_text"] or qs["report"]["exact_duplicates_removed"]:
+        st.caption(f"{len(qs['report']['skipped_empty_text'])} row(s) without text skipped · "
+                   f"{len(qs['report']['exact_duplicates_removed'])} exact duplicate(s) removed")
+    if _query_vectors() is None:
+        mismatch = _mode_mismatch(ss.index)
+        blocked = bool(mismatch) or (not mock_mode() and not ss.consent_embed)
+        if mismatch:
+            st.warning(mismatch)
+        elif blocked:
+            st.caption("Embedding the queries sends their text to OpenAI; give embedding consent in **Data & API**.")
+        if st.button(f"Embed {len(qs['records'])} query item(s)", type="primary", disabled=blocked):
+            try:
+                vecs, valid, tokens = em.embed_queries([r["selected_embed_text"] for r in qs["records"]], get_embedder(), ss.index)
+            except (em.ConsentError, em.EmbeddingError) as exc:
+                st.error(str(exc))
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"The queries could not be embedded: {em.safe_error(exc)}")
+            else:
+                qs.update(vectors=vecs, valid=valid,
+                          basis=(ss.index.model, ss.index.requested_dimensions, ss.index.settings_fingerprint))
+                log_usage("query embedding (mock estimate)" if mock_mode() else "query embedding", ss.index.model, {"tokens": tokens})
+                st.rerun()
+        return None
+    by_q = {r["item_id"]: r for r in qs["records"]}
+    qid = st.selectbox(f"Query item ({len(by_q)} loaded)", list(by_q), key="query_pick",
+                       format_func=lambda i: f"{i[len(QUERY_PREFIX):]} — {viz._preview(by_q[i], 80)}")
+    return by_q[qid]
+
+
+def _batch_search(mode, k, thr, allowed):
+    qs = ss.query_set
+    rows = []
+    by_id = records_by_id()
+    for pos, q in enumerate(qs["records"]):
+        if not qs["valid"][pos]:
+            rows.append({"query_id": q["source_item_id"], "rank": None, "item_id": None, "cosine_similarity": None,
+                         "note": "zero vector"})
+            continue
+        res = rt.select(rt.cosine_scores(ss.index, qs["vectors"][pos]), ss.index.item_ids, mode, k, thr, None, allowed)
+        if res.empty:
+            rows.append({"query_id": q["source_item_id"], "rank": None, "item_id": None, "cosine_similarity": None,
+                         "note": "no item met the filter"})
+        for _, r in res.iterrows():
+            rec = by_id[r["item_id"]]
+            rows.append({"query_id": q["source_item_id"], "rank": int(r["rank"]), "item_id": r["item_id"],
+                         "cosine_similarity": r["cosine_similarity"], "domain": rec["roles"].get("domain"),
+                         "task": rec["roles"].get("task"), "note": ""})
+    ss.query_batch = {"table": pd.DataFrame(rows), "mode": mode, "k": k, "threshold": thr}
+    st.rerun()
+
+
+def _show_batch():
+    b = ss.query_batch
+    if not b:
+        return
+    table = b["table"]
+    label = {"top_k": f"top {b['k']}", "threshold": f"cosine ≥ {b['threshold']:.2f}", "both": f"cosine ≥ {b['threshold']:.2f}, top {b['k']}"}[b["mode"]]
+    with st.expander(f"Batch results for {table['query_id'].nunique()} queries ({label}, cosine only)", expanded=True):
+        st.dataframe(table, hide_index=True, width="stretch",
+                     column_config={"cosine_similarity": st.column_config.NumberColumn(format="%.4f")})
+        st.download_button("Batch results (CSV)", storage.to_csv_bytes(table), "batch_search_results.csv", "text/csv")
+        st.caption("Pick a query in the dropdown and click Search to review its candidates and continue to task confirmation.")
 
 
 def _new_target(text, opts, key):
@@ -522,12 +670,16 @@ def _new_target(text, opts, key):
 
 def _run_search(target, mode, k, thr, allowed, use_bm25, hybrid):
     index = ss.index
-    if target["item_id"] == ta.NEW_TARGET_ID:
-        if index.model == em.MOCK_MODEL and not mock_mode():
-            st.error("These vectors were built in mock mode. Switch to mock mode or regenerate embeddings with OpenAI.")
+    if target["item_id"].startswith(QUERY_PREFIX):
+        vecs = _query_vectors()
+        pos = next(i for i, r in enumerate(ss.query_set["records"]) if r["item_id"] == target["item_id"])
+        if vecs is None or not ss.query_set["valid"][pos]:
+            st.error("Embed the query items first.")
             return
-        if index.model != em.MOCK_MODEL and mock_mode():
-            st.error("These vectors were built with OpenAI. Switch to OpenAI mode to embed new text with the same model.")
+        q, exclude = vecs[pos], None
+    elif target["item_id"] == ta.NEW_TARGET_ID:
+        if _mode_mismatch(index):
+            st.error(_mode_mismatch(index))
             return
         try:
             q = em.embed_query(target["selected_embed_text"], get_embedder(), index)
