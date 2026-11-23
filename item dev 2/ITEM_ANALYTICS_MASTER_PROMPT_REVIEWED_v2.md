@@ -2,10 +2,11 @@
 
 **Review status:** Cross-role specification review completed 2026-11-22; this is a revised *implementation specification*, not an implemented application.  
 **Amendment v2.1 (2026-11-22):** SME add/remove of elements in the key-feature, instance and distractor spaces (§2.5–2.6, §9, §12, §14 checks 27–28) and a feature-space library searchable by task or domain (§2.13, §12, §14 check 29), and an Import section split into **bank import** and **new item input** (typed text or CSV/XLSX), with a new-item dropdown and batch search (§5, §7, §12, §14 checks 30–31). A reference implementation lives in `item-analytics-poc/`.  
+**Amendment v2.2 (2026-11-22):** a dedicated embedded **space database** (SQLite) that stores SME-reviewed key-feature, instance and distractor spaces for search, update, removal and future use (§2.14, §3, §9A, §12, §13, §14 checks 32–38).  
 **Intended executor:** Claude Code, OpenAI Codex, or a comparable autonomous coding agent.  
 **Artifact type:** Executable implementation specification and acceptance contract, **not** a user-facing essay.  
 **Target:** Streamlit Community Cloud, local VS Code, or other small Python hosting environment.  
-**Scope:** Less than 1,000 user-uploaded assessment items; no shipped NCLEX simulation data; no relational/vector database; OpenAI API for embeddings and structured cognitive feature extraction.
+**Scope:** Less than 1,000 user-uploaded assessment items; no shipped NCLEX simulation data; no item or vector database (the only database is the embedded space library of §9A); OpenAI API for embeddings and structured cognitive feature extraction.
 
 ## 0. Mandatory agent operating instructions
 
@@ -59,6 +60,7 @@ Build a **generic, database-free item bank analytics and cognitive feature decom
 11. **Enemy-Item Candidate Detection:** Flag duplicates, stem/option overlap, same-task near-duplicates, answer leakage, or unsafe co-administration patterns for SME review; never automatically certify true enemies from similarity alone.
 12. **Export/Import Results:** CSV/Excel for search results, unique items, reviewed features, evidence maps, annotations, and session/project bundle with vectors/model IDs/settings (excluding API secrets). Optionally provide JSON export for downstream use.
 13. **Feature-Space Library:** a table in which SMEs search all feature spaces in the session — the current space and every archived one — by **task** and **domain**, with further filters for space type (declarative, procedural, instance, distractor), review status and keyword. Show a per-space summary (task, domain, target, confirmed-sibling N, element counts per space, removed count) and an element table with label, definition, status, origin (AI proposal vs SME-added), importance, SME-approved coverage within that space, supporting items, option references and evidence types. Exportable as CSV.
+14. **Space Database (v2.2):** save SME-reviewed spaces from the session into a dedicated database and search, update, remove/restore, delete/restore and back up saved spaces and their elements across sessions, by workspace, task, domain, space type, status and keyword (see §9A).
 
 The UI should be organized around one main sequential workflow: **Upload → Map Columns → Embed → Search → Confirm Same Task → Decompose → SME Review → Visualize / Export**. Ancillary analytical tabs may branch after search.
 
@@ -66,7 +68,7 @@ The UI should be organized around one main sequential workflow: **Upload → Map
 
 - Python 3.11+ (choose a tested Streamlit Cloud-supported version).
 - Streamlit + pandas + NumPy + OpenAI official Python SDK + scikit-learn + Plotly + openpyxl. Optional `rank-bm25` for lexical search and `umap-learn` for UMAP; gracefully disable optional features when packages are missing.
-- **No** SQL, PostgreSQL, pgvector, Pinecone, Chroma, Qdrant, FAISS, long-running server, local text-generation model, or separate vector DB requirement. For N <= 1,000, exact vector matrix multiplication is adequate.
+- **No** SQL, PostgreSQL, pgvector, Pinecone, Chroma, Qdrant, FAISS, long-running server, local text-generation model, or separate vector DB requirement. For N <= 1,000, exact vector matrix multiplication is adequate. **Exception (v2.2):** a single embedded SQLite file (Python standard library, no server) is allowed solely for the space library of §9A; it never stores item banks or embedding vectors.
 - Embedding default `text-embedding-3-small` (default dimensionality **1536**, not the legacy MiniLM 384). Do not hard-code dimension: determine from API output, enforce consistency, and optionally support documented dimensionality reduction in API settings where the model permits it.
 - Chat/reasoning model for decomposition: user-configurable OpenAI model ID supported by the account; use structured JSON-schema output where supported and robust parse/validate/retry behavior otherwise. Never assume a specific model is universally available.
 - Explicit and understandable API usage consent, progress, cancellation where feasible, error reporting, and optional cost/usage accounting. Separate consent for embedding and LLM decomposition; show text-preview/sample and approximate token/request budget before sending. Limit LLM decomposition to the target plus SME-confirmed subset (never transmit 1,000 raw items in one request). Bounded chunking with cross-chunk canonicalization and provenance; preserve partial validated output after failures. If API fails, preserve existing vectors and reviews and allow retry without corrupting state.
@@ -304,6 +306,19 @@ p_f=100n_f/N\%.
 - **Add elements (v2.1).** The SME can add an element to the declarative, procedural, instance or distractor space. Key and instance elements need at least one supporting item from the target or confirmed siblings, plus either a quote that appears verbatim in every selected item (`explicit_text`) or an inference rationale (`clinically_inferred`); procedural elements also take dominance, procedure group and order. Distractor candidates must cite incorrect options of items whose key is known; a keyed option or an item without a usable key is refused. Validate SME additions with the same evidence checks as model output and refuse invalid ones with an actionable message. Record SME additions with origin `sme`, status `accepted`, reviewer and timestamp; count them in SME-approved incidence but never in raw AI incidence.
 - **Remove elements (v2.1).** Removal takes an element out of its space, its SME-approved frequency, option links and approved exports. It must be reversible: keep the element with status `removed`, its prior status and an optional reason, and offer **Restore**. Removal is a dedicated action (not a free-text status edit) and is written to the audit history. A later model run that re-proposes a removed element must not resurrect it; route the new evidence to the pending-update confirmation instead.
 
+## 9A. Space database (v2.2)
+
+Persist SME-reviewed spaces so they can be searched, updated, removed and reused after the session ends.
+
+- **Engine and scope.** One embedded SQLite file (standard library; parameterized SQL only; foreign keys on). Tables: `spaces` (space ID, workspace, task name, decision/action, domain, target item ID and short preview, confirmed sibling IDs, source file name, notes, status `active|deleted`, integer version, created/updated by and at), `elements` (one row per key, instance or distractor element: feature ID, space type, label, definition, review status, prior status when removed, importance 1–5, dominance/group/order for procedures, supporting items, option references, evidence types, source spans, inference rationale, misconception hypothesis, SME note, origin AI vs SME), and `history` (append-only action log with before/after values, actor and time). Never store item banks, embedding vectors or credentials.
+- **Saving.** Saving is an explicit SME action from the Decomposition review or the Space Library. A space can be saved only after its target task is confirmed, and it is filed under a user-chosen **workspace** (a grouping, not an access control). Every element keeps its review status, so SME-approved, pending and removed elements remain distinguishable; merged duplicates are not saved. The session space remembers its database link; later saves update that record in place.
+- **Concurrency.** Every write increments the space version, and every update carries the version the caller read. A stale version is refused with a clear message and a **Save as new space** option; nothing is silently overwritten, including edits made in the database after a session save.
+- **Search.** Filter spaces and elements by workspace, task, domain, space type, status and keyword (label, definition, note, misconception, task or domain; LIKE wildcards in user text are escaped). Show per-space element counts by type and each element's coverage within its own saved sibling set.
+- **Update.** Edit element label, definition, review status, importance, dominance, procedure group, order, note and misconception hypothesis in place, and space task, domain, decision, workspace and notes. Validate as in §9 (importance 1–5 or unrated; procedural fields only on procedural elements; removal through its own action). Multiple edits to one space in one submission apply in sequence, each using the version returned by the previous write.
+- **Removal.** Elements are removed softly (prior status kept) and restored on request. Spaces are deleted softly and restored on request. Only a deleted space can be **purged**, after an explicit confirmation; purge removes its rows but the history keeps a tombstone with the task, domain and element count.
+- **Backup and reuse.** Export the library (or one workspace) to JSON and restore it into another database, skipping or replacing spaces with the same ID; reject files with another format or schema version. Project bundles carry the session's database link, which is ignored on a different database.
+- **Location and sharing.** Local runs default to `data/space_library.sqlite` (git-ignored). Hosted deployments keep the database **off** unless an administrator sets `ITEM_ANALYTICS_DB_PATH` (environment or Streamlit secret; `off` disables it everywhere), because the file is shared by everyone with access to the app and hosted file systems may not persist across redeploys. The UI states where the database is, that it is shared, and that it holds quoted item evidence.
+
 ## 10. Visualizations
 
 ### Item embedding plot (PCA, t-SNE, optional UMAP)
@@ -346,12 +361,12 @@ Flag review candidates based on exact duplicate/near-duplicate stem, high cosine
 
 Create a polished, responsive app with sidebar and main workflow:
 
-- Sidebar: **Data & API**, **Search**, **Decomposition**, **Distractors**, **Feature Spaces**, **Embedding Visualization**, **Difficulty**, **Classification**, **Enemy Candidates**, **Exports**. Use either `st.tabs` or a small navigation menu; avoid losing state when navigating.
+- Sidebar: **Data & API**, **Search**, **Decomposition**, **Distractors**, **Space Library**, **Embedding Visualization**, **Difficulty**, **Classification**, **Enemy Candidates**, **Exports**. Use either `st.tabs` or a small navigation menu; avoid losing state when navigating.
 - Import pane (compact tabs **Bank import**, **New items**, **API & embeddings**): drag-drop upload, multi-sheet choice, schema auto-detection, all-column preview, map input text and metadata, ID/key/options, stats and warning banners; explicit **Build Embeddings** button.
 - Search pane: target is a bank item or a new item, each picked from a dropdown, with batch search over all new items; cosine-first, Top K/threshold/both, optional keyword toggle, clear result counts, deduplicated table and complete option cards; submit button.
 - Task pane: task suggestion with source evidence, edit/confirm, and each sibling candidate checkbox/tri-state status before feature extraction.
 - Feature pane: no feature count limit; four categorized panels, feature frequency with denominator, supporting IDs, multi-option distractor references, evidence text, dropdown importance rating 1–5, status/edit tools, procedural dominant/alternative selector, an **Add an element to a space** form (space selector: declarative key feature, procedural key feature, instance feature, distractor candidate) and a **Remove or restore elements** panel.
-- Feature Spaces pane: per-space summary table and a filterable element table (task, domain, space type, status, keyword; removed elements hidden by default), with CSV export.
+- Space Library pane with two tabs. **Session spaces:** per-space summary, save/update/save-as-new to the database, and a filterable element table (task, domain, space type, status, keyword; removed elements hidden by default) with CSV export. **Database:** filters (workspace, task, domain, space type, status, keyword, removed elements, deleted spaces), a saved-space table, an editable element table, remove/restore, delete/restore/purge, space details with history, and JSON backup/restore. A compact save row also appears at the end of the Decomposition review.
 - Visualization: PCA/t-SNE/UMAP selector, metadata color dropdown, category filters, target/sibling highlighting, hover/click details, item-feature heatmap, optional network.
 - Status dashboard: file name, N items, N embedded, embedding model/dims, API readiness, N retrieved, N accepted, N features, percentage SME-reviewed; clear warnings about ephemeral storage and API cost.
 - Export center: results CSV/JSON, reviewed feature mapping CSV/XLSX, item-feature incidence CSV, dataset/embedding project bundle, plot export when practical.
@@ -362,6 +377,7 @@ Create a polished, responsive app with sidebar and main workflow:
 
 - OpenAI API keys must never be committed, logged, displayed in diagnostics, copied into reports, or written to saved archives. Use `st.secrets`, env vars, or session-only masked input; secure precedence and help text.
 - API requests must occur **server-side** only, on explicit user action and consent; explain that item content will be transmitted to OpenAI for embeddings and/or decomposition. Data may be proprietary; permit a user to back out and continue local metadata exploration without sending content.
+- The space database (§9A) is shared by everyone who can reach its file: keep it off on hosted deployments unless explicitly configured, state this in the UI, store no credentials, use parameterized SQL only, and keep tests on temporary database files.
 - Treat uploaded text and LLM outputs as untrusted. Guard against prompt-injection instructions inside item stems, HTML injection, CSV formula injection on exports, and giant/invalid uploads. Prompt-injection text should be data, never task instructions. Include a consent toggle for external calls.
 - Build fail-soft behavior: blank/missing keys, zero vectors, partial API failures, malformed schemas, label/ID mismatches, t-SNE tiny N, empty sibling set, missing Rasch labels, unsupported Excel files, upload size constraints.
 - Provide progress feedback and avoid repeated paid calls on Streamlit reruns. Optional retrieval and viewing should work offline **after** vectors have been generated/imported.
@@ -415,6 +431,13 @@ Write real `pytest` unit tests, API-mocked integration tests, and at least one S
 29. With a current and an archived space for different tasks and domains, the Feature Spaces table filters correctly by task, by domain, by space type, by status and by keyword; per-space counts and the removed count are correct; coverage uses each space's own denominator.
 30. Add four synthetic new items from an Excel file whose text columns share the bank's names: columns are preselected, IDs are namespaced, adding embeds all four with the bank's model, the new-item dropdown searches a chosen item without re-embedding, batch search returns at most K unique bank items per new item (never new items), and the chosen new item proceeds to task proposal as the target.
 31. Typed new items accumulate in the same list with generated IDs, can be removed, and can be searched; new items are excluded from the bank index and survive a bundle export as records (vectors are re-embedded on demand).
+32. Save a confirmed space with all four space types: the database stores task, domain, workspace, sibling IDs and every element with status, importance, evidence and spans; saving an unconfirmed task or an empty space is refused; the database never contains API keys, item banks or vectors.
+33. Search saved elements by task, domain, workspace, space type, status and keyword (including misconception text); a keyword containing `%` or `_` matches literally.
+34. Update element fields and space details with history entries; invalid importance, procedural fields on non-procedural elements, and status changes to `removed` are refused; several edits to one space in one submission all apply.
+35. A stale version is refused for element updates and for re-saving a session space after the saved copy changed; "save as new" keeps both; the database edit survives.
+36. Remove and restore elements (prior status returns); delete and restore spaces; purge works only on a deleted space with confirmation and leaves a history tombstone.
+37. A JSON backup restores into an empty database; re-import skips or replaces by space ID; foreign formats are rejected.
+38. The database is off on hosted deployments without configuration, honours `ITEM_ANALYTICS_DB_PATH` (including `off`), and the app shows the reason when it is off.
 
 ### Suggested synthetic demonstration
 
@@ -444,7 +467,7 @@ Each reviewer must assess **correctness, evidence/provenance, generality to arbi
 At completion, report in this order:
 
 1. **Repository location and exact files created/edited**, with links or relative paths.
-2. **Implemented user flows**, identifying all 13 major capabilities and what is truly operational.
+2. **Implemented user flows**, identifying all 14 major capabilities and what is truly operational.
 3. **Architecture decisions**, especially in-memory vectors, dynamic column mapping, OpenAI embedding/chat adapters, cosine-first design, and candidate SME validation.
 4. **Testing evidence:** commands, passed/failed counts, important edge cases, manual UI checks.
 5. **Launch instructions:** setup, environment, `streamlit run app.py`, and Streamlit Cloud secrets configuration (no real secrets).

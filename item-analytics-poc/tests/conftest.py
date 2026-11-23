@@ -20,6 +20,12 @@ SAMPLE = ROOT / "samples" / "synthetic_items.csv"
 
 
 @pytest.fixture(autouse=True)
+def isolated_space_db(monkeypatch, tmp_path):
+    """Every test (including AppTest runs) uses its own temporary space database."""
+    monkeypatch.setenv("ITEM_ANALYTICS_DB_PATH", str(tmp_path / "space_library.sqlite"))
+
+
+@pytest.fixture(autouse=True)
 def no_network(monkeypatch):
     """Fail any test that attempts a non-local connection."""
     real_connect = socket.socket.connect

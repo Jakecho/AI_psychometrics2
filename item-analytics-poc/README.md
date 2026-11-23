@@ -8,6 +8,8 @@ Workflow: **Upload → Map columns → Embed → Search → Confirm same task �
 
 In **Decomposition → Step 4**, SMEs can add elements to each space (key features, instance features, distractor candidates) with verified evidence, and remove or restore elements. **Feature Spaces** lists every space in the session and filters it by task or domain.
 
+**Space Library → Database** keeps reviewed spaces across sessions in a dedicated SQLite file (`data/space_library.sqlite` locally). Save a space from the end of the Decomposition review or from **Space Library → Session spaces**. You can then search by workspace, task, domain, space type, status or keyword; edit elements in place; remove or restore elements; delete, restore or purge spaces; review the history; and back up or restore the library as JSON. Saves carry a version number, so a stale copy cannot overwrite newer edits.
+
 **Import** has three tabs: **Bank import** (the item bank), **New items** (items to compare against the bank, typed or from an Excel/CSV file such as `samples/synthetic_queries.xlsx`), and **API & embeddings**. New items are embedded with the bank's model when added and are never added to the bank. In **Search**, pick a bank item or a new item from its dropdown, or click **Search all new items** for a downloadable batch table.
 
 ## Run locally
@@ -29,6 +31,7 @@ For real analysis, choose **OpenAI** mode and provide a key in one of three ways
 | Main file path | `item-analytics-poc/app.py` |
 | Python | 3.11–3.13 |
 | Secrets | `OPENAI_API_KEY = "..."` (optional; users can also paste a key per session) |
+| Space database | Off by default when hosted. To enable it, set `ITEM_ANALYTICS_DB_PATH` to a writable path. Everyone with access to the app then shares the library, and Community Cloud storage may not survive a redeploy, so keep JSON backups. |
 
 Storage is session-only. A refresh or disconnect loses unsaved work, so use **Exports → Project bundle** and re-import it from **Data & API**.
 
@@ -36,7 +39,7 @@ Storage is session-only. A refresh or disconnect loses unsaved work, so use **Ex
 
 ```bash
 cd item-analytics-poc
-python -m pytest -q          # 70 tests; all external network access is blocked during tests
+python -m pytest -q          # 81 tests; all external network access is blocked during tests
 ```
 
 The suite covers the spec's acceptance checks with synthetic data. It uses mocked OpenAI clients and Streamlit `AppTest` for an end-to-end run, section rendering with no data and no key, two-user isolation, the consent gate, and edit persistence across reruns.
@@ -58,6 +61,7 @@ The suite covers the spec's acceptance checks with synthetic data. It uses mocke
 | 11 | Enemy candidates (independent triggers with evidence, linked sets kept separate, SME decisions) | Implemented |
 | 12 | Exports (CSV/XLSX/JSON, incidence matrix, evidence map, audit history, project bundle without keys) | Implemented |
 | 13 | Feature-space library (current and archived spaces, searchable by task, domain, space type, status and keyword) | Implemented |
+| 14 | Space database (SQLite): save reviewed spaces; search, update, remove/restore, delete/restore/purge, history, JSON backup; version conflict protection | Implemented |
 
 ## Design decisions
 
@@ -81,6 +85,10 @@ Each phase was checked from the developer, psychometrician and item-writing SME 
 | R4 | P1 | app.py | A selectbox display function read session state, which is fragile outside a script run. | Labels are precomputed. |
 | R5 | P1 | tests | Holdout fixtures were near-duplicates within each class, so grouping (correctly) removed every same-class neighbour. | Fixtures were made distinct; grouping behaviour is unchanged. |
 | R6 | P1 | psychometrics | Exploratory difficulty output could be mistaken for an estimate. | No estimate is shown until scale comparability is confirmed; multiple scale groups are refused. |
+
+| R7 | P1 | space_db | Two edits to the same saved space in one table submission: the second was refused as a version conflict. | Versions are chained across edits (`apply_editor_changes`, tested). |
+| R8 | P1 | psychometrics | Saved spaces mix SME-approved elements with unreviewed AI proposals. | Status is stored per element and the database view has a Status filter, so approved-only is one click. |
+| R9 | P1 | security | The shared library stores quoted item evidence. | It stays off on hosted deployments unless configured. The UI says it is shared and holds item evidence. Tests use temporary database files. |
 
 No P0 issue is known to be open.
 

@@ -12,7 +12,7 @@ import src.retrieval
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = str(ROOT / "app.py")
-SECTIONS = ["Import", "Search", "Decomposition", "Distractors", "Feature Spaces", "Embedding Visualization",
+SECTIONS = ["Import", "Search", "Decomposition", "Distractors", "Space Library", "Embedding Visualization",
             "Difficulty", "Classification", "Enemy Candidates", "Exports"]
 
 
@@ -163,7 +163,7 @@ def test_sme_adds_and_removes_space_elements_in_the_app():
     next(m for m in at.multiselect if m.label == "Elements to remove").set_value(added).run()
     click(at, "Remove from space")
     assert at.session_state["store"]["features"][added[0]]["review_status"] == "removed"
-    goto(at, "Feature Spaces")
+    goto(at, "Space Library")
     at.multiselect(key="lib_task").set_value(["Prioritize the first action"]).run()
     assert not at.exception
     shown = at.dataframe[-1].value
@@ -214,3 +214,53 @@ def test_typed_new_items_accumulate_and_can_be_removed():
     assert at.session_state["search"]["target"]["item_id"] == "NEW:T002"
 
 
+
+
+def test_spaces_are_saved_searched_updated_and_removed_in_the_database():
+    import os
+    from src import space_db as sdb
+    at = load_demo(new_app())
+    goto(at, "Search")
+    click(at, "Search")
+    goto(at, "Decomposition")
+    click(at, "Propose target task and candidate alignment")
+    click(at, "Accept task")
+    for cid in at.session_state["task_review"]["candidate_ids"]:
+        at.radio(key=f"align_S-01_{cid}").set_value("same_task" if cid != "S-08" else "different_task").run()
+    click(at, "Extract features")
+    store = at.session_state["store"]
+    for fid in store["order"][:3]:
+        src.decomposition.update_feature(store, fid, {"review_status": "accepted"}, "sme")
+    at.text_input(key="db_workspace").input("Team A").run()
+    click(at, "Save to database")
+    link = at.session_state["store"]["db_link"]
+    db = sdb.SpaceDB(os.environ["ITEM_ANALYTICS_DB_PATH"])
+    saved = db.spaces()
+    assert saved["space_id"].tolist() == [link["space_id"]] and saved.iloc[0]["workspace"] == "Team A"
+    assert saved.iloc[0]["task_name"] == "Prioritize the first action" and saved.iloc[0]["siblings_N"] == 4
+    click(at, "Update saved space")  # re-save in place with the version it holds
+    assert at.session_state["store"]["db_link"]["version"] == 2 and len(db.spaces()) == 1
+    goto(at, "Space Library")
+    at.multiselect(key="db_task").set_value(["Prioritize the first action"]).run()
+    at.text_input(key="db_text").input("Prioritize").run()
+    assert not at.exception
+    element_id = f"{link['space_id']}:{store['order'][0]}"
+    next(m for m in at.multiselect if m.label == "Remove elements").set_value([element_id]).run()
+    click(at, "Remove")
+    assert db.elements(include_removed=True).set_index("element_id").loc[element_id, "status"] == "removed"
+    # the session copy is now stale: updating from the session is refused, saving as new is allowed
+    goto(at, "Decomposition")
+    click(at, "Update saved space")
+    assert any("changed since you opened it" in e.value for e in at.error)
+    click(at, "Save as new space")
+    assert len(db.spaces()) == 2
+    goto(at, "Space Library")
+    click(at, "Delete space")
+    assert len(db.spaces()) == 1 and len(db.spaces(include_deleted=True)) == 2
+
+
+def test_database_section_reports_when_disabled(monkeypatch):
+    monkeypatch.setenv("ITEM_ANALYTICS_DB_PATH", "off")
+    at = load_demo(new_app())
+    goto(at, "Space Library")
+    assert any("disabled by configuration" in i.value for i in at.info)

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 
 import pandas as pd
 import streamlit as st
@@ -22,6 +23,7 @@ from src import feature_frequency as ff
 from src import ingest
 from src import predictions as pr
 from src import retrieval as rt
+from src import space_db as sdb
 from src import space_library as sl
 from src import storage
 from src import task_alignment as ta
@@ -33,7 +35,7 @@ from src.text_builder import fingerprint, sha256_text
 
 ROOT = Path(__file__).resolve().parent
 SAMPLE = ROOT / "samples" / "synthetic_items.csv"
-SECTIONS = ["Import", "Search", "Decomposition", "Distractors", "Feature Spaces", "Embedding Visualization",
+SECTIONS = ["Import", "Search", "Decomposition", "Distractors", "Space Library", "Embedding Visualization",
             "Difficulty", "Classification", "Enemy Candidates", "Exports"]
 NONE = "(none)"
 
@@ -47,7 +49,7 @@ DEFAULTS = {
     "llm_mode": "Offline mock (no network)", "consent_embed": False, "consent_llm": False,
     "api_key_input": "", "embed_model": em.DEFAULT_MODEL, "embed_dims": 0, "llm_model": "",
     "new_items": {"records": [], "vectors": {}, "basis": None}, "ni_df": None, "ni_name": None, "ni_hash": None,
-    "query_batch": None,
+    "query_batch": None, "db_workspace": "default", "db_rev": 0,
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
@@ -55,7 +57,7 @@ for k, v in DEFAULTS.items():
 ss = st.session_state
 # Keep settings whose widgets live on one section when another section is shown.
 for _k in ("llm_mode", "consent_embed", "consent_llm", "api_key_input", "embed_model", "embed_dims", "llm_model",
-           "freq_source", "scale_confirmed"):
+           "freq_source", "scale_confirmed", "db_workspace"):
     if _k in ss:
         ss[_k] = ss[_k]
 
@@ -76,6 +78,61 @@ def records_by_id():
 
 def mock_mode():
     return ss.llm_mode.startswith("Offline")
+
+
+def get_db():
+    """(SpaceDB or None, reason). Off on hosted deployments unless configured; never cached across sessions."""
+    secrets = {}
+    try:
+        if sdb.ENV_VAR in st.secrets:
+            secrets = {sdb.ENV_VAR: str(st.secrets[sdb.ENV_VAR])}
+    except Exception:  # noqa: BLE001 - no secrets file
+        pass
+    path, reason = sdb.resolve_path(secrets=secrets)
+    if path is None:
+        return None, reason
+    try:
+        return sdb.SpaceDB(path), reason
+    except (sdb.SpaceDBError, sqlite3.Error, OSError) as exc:
+        return None, f"The space database could not be opened: {exc}"
+
+
+def save_session_space(review, store, target, sib, as_new=False):
+    """Save or update a session space in the database; the store remembers its database link."""
+    db, reason = get_db()
+    if db is None:
+        st.error(reason)
+        return
+    link = store.get("db_link") if not as_new else None
+    if link and link.get("path") != str(db.path):
+        link = None
+    try:
+        sid, version = db.save_space(ss.db_workspace, review, store, target, sib, ss.reviewer or "anonymous",
+                                     source_name=ss.file_name, space_id=link["space_id"] if link else None,
+                                     expected_version=link["version"] if link else None)
+    except sdb.ConflictError as exc:
+        st.error(f"{exc} Use **Save as new space** to keep both versions.")
+        return
+    except sdb.SpaceDBError as exc:
+        st.error(str(exc))
+        return
+    store["db_link"] = {"space_id": sid, "version": version, "path": str(db.path)}
+    ss.db_rev += 1
+    ss.notice = f"{'Updated' if link else 'Saved'} space {sid} (version {version}) in workspace '{ss.db_workspace}'."
+    st.rerun()
+
+
+def save_controls(review, store, target, sib, key):
+    link = store.get("db_link")
+    a, b, c = st.columns([2, 1, 1], vertical_alignment="bottom")
+    a.text_input("Workspace (library name)", key="db_workspace", help="Groups spaces in the database. Not an access control.")
+    if b.button("Update saved space" if link else "Save to database", type="primary", key=f"save_{key}", width="stretch"):
+        save_session_space(review, store, target, sib)
+    if link and c.button("Save as new space", key=f"saveas_{key}", width="stretch"):
+        save_session_space(review, store, target, sib, as_new=True)
+    if link:
+        st.caption(f"Linked to database space {link['space_id']} (version {link['version']}). A later edit there must be reloaded "
+                   "before this space can overwrite it.")
 
 
 def api_key():
@@ -797,7 +854,7 @@ def _run_search(target, mode, k, thr, allowed, use_bm25, hybrid):
         if any(v != "unreviewed" for v in old["decisions"].values()) or (ss.store and ss.store["features"]):
             ss.archived_reviews.append({"reason": "A new search replaced the candidate set.", "task_review": old,
                                         "store": ss.store, "search_target": old["target_id"]})
-            ss.notice = "The previous task and feature review was archived (see Feature Spaces and Exports)."
+            ss.notice = "The previous task and feature review was archived (see Space Library and Exports)."
         ss.task_review, ss.store = None, None
         bump_store()
     ss.search = {"target": target, "results": results, "mode": mode, "k": k, "threshold": thr,
@@ -1020,6 +1077,8 @@ def _feature_review(target, sib):
     else:
         st.dataframe(shown, hide_index=True, width="stretch")
     st.caption("Frequencies describe the current confirmed set. They are not population prevalence or evidence that a feature drives difficulty.")
+    st.markdown("**Save this space for future use**")
+    save_controls(ss.task_review, store, target, sib, "decomp")
 
 
 def _feature_table(rows, ftype, raw_by, sme_by, target_id, n, reviewer):
@@ -1245,28 +1304,213 @@ def page_distractors():
 # =========================================================================== Feature spaces
 
 def page_spaces():
-    st.subheader("5 · Feature space library")
+    st.subheader("5 · Space library")
     require_records()
+    session_tab, db_tab = st.tabs(["Session spaces", "Database"])
+    with session_tab:
+        _session_spaces()
+    with db_tab:
+        _database_spaces()
+
+
+def _session_space_entries():
+    by_id = records_by_id() | {r["item_id"]: r for r in ss.new_items["records"]}
+    if ss.search:
+        by_id[ss.search["target"]["item_id"]] = ss.search["target"]
+    entries = []
+    if ss.task_review is not None and ss.store:
+        entries.append(("current", ss.task_review, ss.store))
+    for n, a in enumerate(ss.archived_reviews, start=1):
+        if a.get("task_review") and a.get("store"):
+            entries.append((f"archived {n}", a["task_review"], a["store"]))
+    out = []
+    for name, review, store in entries:
+        tid = review.get("target_id")
+        out.append((name, review, store, by_id.get(tid) or {"item_id": tid, "fields": {}}))
+    return out
+
+
+def _session_spaces():
     spaces = sl.collect_spaces(ss.task_review, ss.store, ss.archived_reviews, records_by_id())
     if not spaces:
         st.info("No feature spaces yet. Build one in **Decomposition**; earlier spaces are kept here when you start a new search.")
         return
-    st.caption("Search every key-feature, instance and distractor space in this session — the current one and archived ones — "
-               "by task or domain. Coverage uses each space's own confirmed sibling set.")
     st.dataframe(sl.space_summary(spaces), hide_index=True, width="stretch")
-    table = sl.space_features(spaces)
+    entries = _session_space_entries()
+    if entries:
+        names = [e[0] for e in entries]
+        pick = st.selectbox("Space to save", names, key="session_save_pick",
+                            format_func=lambda n: f"{n} — {next(e for e in entries if e[0] == n)[1].get('task', {}).get('name') or '(task not confirmed)'}")
+        name, review, store, target = next(e for e in entries if e[0] == pick)
+        save_controls(review, store, target, ta.accepted_siblings(review), f"lib_{pick}")
+    with st.expander("Search elements in session spaces"):
+        table = sl.space_features(spaces)
+        c1, c2, c3, c4 = st.columns(4)
+        tasks = c1.multiselect("Task", sorted(table["task"].unique()) if len(table) else [], key="lib_task")
+        domains = c2.multiselect("Domain", sorted(table["domain"].unique()) if len(table) else [], key="lib_domain")
+        types = c3.multiselect("Space", [FEATURE_TYPE_LABELS[t] for t in FEATURE_TYPES], key="lib_type")
+        statuses = c4.multiselect("Status", sorted(table["status"].unique()) if len(table) else [], key="lib_status")
+        a, b = st.columns([3, 1], vertical_alignment="bottom")
+        text = a.text_input("Keyword (label, definition, task or domain)", key="lib_text")
+        include_removed = b.toggle("Include removed", key="lib_removed")
+        shown = sl.filter_features(table, tasks, domains, types, statuses, text)
+        if not include_removed:
+            shown = shown[shown["status"] != "removed"]
+        st.caption(f"{len(shown)} of {len(table)} elements")
+        st.dataframe(shown, hide_index=True, width="stretch")
+        st.download_button("Filtered elements (CSV)", storage.to_csv_bytes(shown), "session_space_elements.csv", "text/csv")
+
+
+DB_TYPE_LABELS = {t: FEATURE_TYPE_LABELS[t] for t in FEATURE_TYPES}
+
+
+def _database_spaces():
+    db, reason = get_db()
+    if db is None:
+        st.info(reason)
+        return
+    actor = ss.reviewer or "anonymous"
+    st.caption(f"{reason} · shared by everyone who can open this app · stores spaces with their quoted item evidence; "
+               "item banks and vectors are not stored.")
+    for err in st.session_state.pop("db_errors", []):
+        st.error(err)
+    facets = db.facets(include_deleted=True)
     c1, c2, c3, c4 = st.columns(4)
-    tasks = c1.multiselect("Task", sorted(table["task"].unique()) if len(table) else [], key="lib_task")
-    domains = c2.multiselect("Domain", sorted(table["domain"].unique()) if len(table) else [], key="lib_domain")
-    types = c3.multiselect("Space", [FEATURE_TYPE_LABELS[t] for t in FEATURE_TYPES], key="lib_type")
-    statuses = c4.multiselect("Status", sorted(table["status"].unique()) if len(table) else [], key="lib_status")
-    text = st.text_input("Keyword (label, definition, task or domain)", key="lib_text")
-    shown = sl.filter_features(table, tasks, domains, types, statuses, text)
-    if not st.toggle("Include removed elements", key="lib_removed"):
-        shown = shown[shown["status"] != "removed"]
-    st.caption(f"{len(shown)} of {len(table)} elements")
-    st.dataframe(shown, hide_index=True, width="stretch")
-    st.download_button("Filtered elements (CSV)", storage.to_csv_bytes(shown), "feature_space_library.csv", "text/csv")
+    ws = c1.selectbox("Workspace", ["(all)"] + facets["workspaces"], key="db_ws")
+    tasks = c2.multiselect("Task", facets["tasks"], key="db_task")
+    domains = c3.multiselect("Domain", facets["domains"], key="db_domain")
+    types = c4.multiselect("Space", list(DB_TYPE_LABELS), format_func=DB_TYPE_LABELS.get, key="db_type")
+    a, s_, b, c = st.columns([2, 1, 1, 1], vertical_alignment="bottom")
+    text = a.text_input("Keyword (label, definition, note, misconception, task or domain)", key="db_text")
+    statuses = s_.multiselect("Status", list(sdb.EDITABLE_STATUSES), key="db_status",
+                              help="For example accepted + edited for SME-approved elements only.")
+    include_removed = b.toggle("Removed elements", key="db_removed")
+    include_deleted = c.toggle("Deleted spaces", key="db_deleted")
+    workspace = None if ws == "(all)" else ws
+    spaces = db.spaces(workspace, tasks, domains, include_deleted=include_deleted)
+    if spaces.empty:
+        st.caption("No saved spaces match. Save one from **Decomposition** or the Session spaces tab.")
+    else:
+        st.dataframe(spaces, hide_index=True, width="stretch", height=min(260, 38 + 35 * len(spaces)))
+    if include_removed and statuses:
+        statuses = statuses + ["removed"]
+    elements = db.elements(workspace, tasks, domains, types, statuses or None, text, include_removed, include_deleted)
+    st.caption(f"{len(elements)} element(s). Edit cells to update; changes are saved immediately and recorded in the history.")
+    if not elements.empty:
+        _database_editor(db, elements, actor)
+    with st.expander("Remove, restore or delete"):
+        _database_actions(db, elements, spaces, actor)
+    with st.expander("Edit space details and history"):
+        _database_space_details(db, spaces, actor)
+    with st.expander("Backup and restore"):
+        st.download_button("Download library backup (JSON)", storage.to_json_bytes(db.export_json()),
+                           "space_library_backup.json", "application/json")
+        up = st.file_uploader("Restore from a backup (JSON)", type=["json"], key="db_backup_upload")
+        mode = st.radio("If a space already exists", ["skip", "replace"], horizontal=True, key="db_import_mode")
+        if up is not None and st.button("Restore backup"):
+            try:
+                counts = db.import_json(json.loads(up.getvalue()), actor, on_conflict=mode)
+            except (sdb.SpaceDBError, ValueError, sqlite3.Error) as exc:
+                st.error(f"Backup not restored: {exc}")
+            else:
+                ss.db_rev += 1
+                ss.notice = f"Backup restored: {counts['added']} added, {counts['replaced']} replaced, {counts['skipped']} skipped."
+                st.rerun()
+
+
+def _database_editor(db, elements, actor):
+    columns = ["element_id", "task", "domain", "space_type", "label", "definition", "status", "importance", "dominance",
+               "procedure_group", "sequence_order", "note", "misconception", "coverage", "supporting_items", "options",
+               "evidence", "origin", "space_version", "updated_by"]
+    data = elements[columns].copy()
+    data["importance"] = data["importance"].map(lambda v: "unrated" if v is None or v != v else str(int(v)))
+    edited = st.data_editor(
+        data, hide_index=True, width="stretch", key=f"dbed_{ss.db_rev}",
+        disabled=["element_id", "task", "domain", "space_type", "coverage", "supporting_items", "options", "evidence",
+                  "origin", "space_version", "updated_by"],
+        column_config={
+            "element_id": st.column_config.TextColumn("id", width="small"),
+            "label": st.column_config.TextColumn(width="medium"),
+            "definition": st.column_config.TextColumn(width="medium"),
+            "status": st.column_config.SelectboxColumn(options=list(sdb.EDITABLE_STATUSES) + ["removed"], required=True),
+            "importance": st.column_config.SelectboxColumn("importance 1–5", options=["unrated", "1", "2", "3", "4", "5"], required=True),
+            "dominance": st.column_config.SelectboxColumn(options=list(DOMINANCE)),
+            "sequence_order": st.column_config.NumberColumn("order", min_value=1, step=1),
+        },
+    )
+    changes = sdb.editor_changes(data.to_dict("records"), edited.to_dict("records"))
+    if not changes:
+        return
+    _applied, errors = sdb.apply_editor_changes(db, changes, actor)
+    ss.db_rev += 1
+    if errors:
+        st.session_state["db_errors"] = errors
+    st.rerun()
+
+
+def _database_actions(db, elements, spaces, actor):
+    labels = {r["element_id"]: f"{r['label'][:60]} · {r['space_type']} · {r['task']}" for _, r in elements.iterrows()}
+    versions = {r["space_id"]: int(r["space_version"]) for _, r in elements.iterrows()}
+    c1, c2 = st.columns(2)
+    with c1:
+        active = [e for e in labels if elements.set_index("element_id").loc[e, "status"] != "removed"]
+        pick = st.multiselect("Remove elements", active, format_func=labels.get, key=f"db_rm_{ss.db_rev}")
+        reason = st.text_input("Reason (recorded)", key=f"db_rm_reason_{ss.db_rev}")
+        if st.button("Remove", disabled=not pick, key="db_rm_btn"):
+            _db_call(lambda: db.set_removed(pick, True, actor, versions, reason))
+    with c2:
+        removed = [e for e in labels if elements.set_index("element_id").loc[e, "status"] == "removed"]
+        pick = st.multiselect("Restore removed elements", removed, format_func=labels.get, key=f"db_rs_{ss.db_rev}",
+                              help="Turn on 'Removed elements' above to list them.")
+        if st.button("Restore", disabled=not pick, key="db_rs_btn"):
+            _db_call(lambda: db.set_removed(pick, False, actor, versions))
+    if spaces.empty:
+        return
+    st.divider()
+    space_labels = {r["space_id"]: f"{r['space_id']} · {r['task_name']} · {r['domain']} · {r['status']}" for _, r in spaces.iterrows()}
+    a, b, c, d = st.columns([2, 1, 1, 1], vertical_alignment="bottom")
+    sid = a.selectbox("Space", list(space_labels), format_func=space_labels.get, key="db_space_pick")
+    row = spaces.set_index("space_id").loc[sid]
+    if row["status"] == "active":
+        if b.button("Delete space", key="db_del"):
+            _db_call(lambda: db.set_space_deleted(sid, True, actor, int(row["version"])))
+    else:
+        if b.button("Restore space", key="db_undel"):
+            _db_call(lambda: db.set_space_deleted(sid, False, actor, int(row["version"])))
+        confirm = c.checkbox("Permanently", key=f"db_purge_ok_{sid}", help="Purging cannot be undone; the history keeps a tombstone.")
+        if d.button("Purge", disabled=not confirm, key="db_purge"):
+            _db_call(lambda: db.purge_space(sid, actor, confirm=True))
+
+
+def _database_space_details(db, spaces, actor):
+    if spaces.empty:
+        st.caption("No spaces.")
+        return
+    sid = st.selectbox("Space", list(spaces["space_id"]), key="db_detail_pick",
+                       format_func=lambda s: f"{s} · {spaces.set_index('space_id').loc[s, 'task_name']}")
+    row = spaces.set_index("space_id").loc[sid]
+    with st.form(f"db_space_form_{sid}_{row['version']}"):
+        a, b = st.columns(2)
+        task = a.text_input("Task", row["task_name"])
+        domain = b.text_input("Domain", row["domain"])
+        a, b = st.columns(2)
+        decision = a.text_input("Decision or action", row["decision_or_action"])
+        workspace = b.text_input("Workspace", row["workspace"])
+        notes = st.text_area("Notes", row["notes"], height=70)
+        if st.form_submit_button("Save details"):
+            _db_call(lambda: db.update_space(sid, {"task_name": task, "domain": domain, "decision_or_action": decision,
+                                                   "workspace": workspace, "notes": notes}, actor, int(row["version"])))
+    st.dataframe(db.history(sid), hide_index=True, width="stretch", height=220)
+
+
+def _db_call(fn):
+    try:
+        fn()
+    except sdb.SpaceDBError as exc:
+        st.error(str(exc))
+        return
+    ss.db_rev += 1
+    st.rerun()
 
 
 # =========================================================================== Visualization
