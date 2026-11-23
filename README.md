@@ -63,6 +63,86 @@ To include an external sample bank, set `LOFT_SAMPLE_BANK` to its CSV path.
 The external-bank checks use the seven-domain NCLEX bank with `3. easy` and
 `6. hard` categories. Tests also use `pytest`; the legacy XLS fixture uses `xlwt`.
 
+### MHRM calibration demonstration
+
+Run `python -m streamlit run MHRM_2D.py`. The numerical implementation lives
+in `mhrm_engine.py` and has no R dependency at runtime. It implements a
+three-stage MH-RM/NR1 strategy for complete binary responses: adaptive
+burn-in, constant-gain SEM averaging, and Robbins-Monro updates using full,
+recursively smoothed item curvature blocks. This follows the strategy in
+[R mirt's MHRM source](https://github.com/philchalmers/mirt/blob/main/R/MHRM.group.R)
+and [Cai (2010)](https://doi.org/10.1007/s11336-009-9136-x).
+
+The model fixes latent means to zero and covariance to the identity. Active
+slopes are constrained to [0,10], Q-matrix zeros stay fixed, and intercepts are
+free. It does not estimate latent covariances, support missing responses or
+polytomous items, compute standard errors, or reproduce all mirt functionality.
+For the supported designs, simple/cross-loading models use at least three
+pure indicators per factor (cross-loading items are added after these anchors).
+Bifactor demonstrations require at least three specific factors with three
+items each. These conservative design restrictions are not a general proof
+of identification; near-proportional bifactor loadings may still be unstable.
+
+The RM cycle limit is additional to burn-in and SEM cycles. Its gain is
+`(gain_scale / RM_cycle)**decay`, with `0.5 < decay <= 1`. Convergence requires
+three small updates after at least 50 RM cycles and a small 30-cycle mean
+projected score. Hitting the limit is reported as nonconvergence. The proposal
+scale is frozen after burn-in. The sampled conditional likelihood trace is
+separate from the final marginal likelihood integration (Gauss-Hermite for
+one/two dimensions; a labeled Sobol QMC approximation above two dimensions).
+Neither the stopping rule nor the integrated likelihood certifies a global
+optimum or adequate mixing. Displayed abilities are posterior draws, not EAPs.
+
+Run `python -m pytest test_mhrm_engine.py`. Checks cover finite-difference
+scores and curvature, posterior sampling, stage transitions, gain/curvature
+recursions, independent likelihood integration, parameter recovery, and the
+Streamlit interface. If R and its `mirt` package are installed, an optional
+test runs `tests/mhrm_reference.R` on the identical data, loading mask, latent
+distribution, and slope bounds. R need not be installed to use the app.
+
+The optional **Cross-check with R mirt** control is enabled by default when
+R/mirt is available. `mirt_validation.py` calls `mirt_validation.R` in a
+separate local R process with the same responses, loading mask, fixed N(0,I)
+distribution, [0,10] slope bounds, 2PL parameterization (`IRTpars=FALSE`),
+and requested stage lengths, gain, MH sweeps, seed, and change tolerance.
+Initialization, proposal adaptation, and convergence rules can differ between
+implementations. This is a cross-implementation comparison, not held-out
+predictive cross-validation or a proof that either fit is globally optimal.
+
+The cross-check displays convergence and version information, active-slope
+and intercept agreement, item-level coefficients and differences, recovery
+against simulated truth, scatterplots, and downloadable CSV tables. Fixed-zero
+slopes are excluded from aggregate metrics. Both fits' marginal likelihoods
+are evaluated with identical integration nodes and weights; the R-native
+likelihood approximation is labeled separately. Nonconverged fits are reported
+as provisional. Python results persist across downloads/display changes, and
+an R failure leaves the Python result available. R fits are cached by data,
+settings, reference version, and comparison source revision.
+
+To enable this on a server, install R with `Rscript` on PATH, then run
+`install.packages("mirt")` in R. The app never installs packages on its own.
+It honors `MIRT_R_LIBRARY`; it also detects the optional local library at
+`~/.cache/ai_psychometrics2/R-library`. Local R installation does not install
+R/mirt on Streamlit Community Cloud. Run `python -m pytest test_mirt_validation.py`
+for comparison/output, error-handling, CSV, and real R integration checks.
+
+**RM parameter animation:** Every stage-3 update records a copy of all item
+coefficients, with cycle 0 representing the SEM-averaged RM initialization.
+Choose **Item to inspect** to follow an item live and replay each active slope
+and its intercept afterward. The player has Play/Pause/Restart controls, a
+cycle slider, and speed selection. Full recorded paths remain visible while
+markers show the selected cycle and its actual parameter update. Axis ranges
+stay fixed. Long runs sample playback frames for responsiveness; all RM cycles
+remain in the traces and selected-item CSV export. Playback uses discrete
+recorded values without interpolating synthetic estimates. Fixed-zero slopes
+are omitted. True simulation coefficients and available R endpoints are
+reference lines, not objectives that RM is guaranteed to reach. Animation
+settings and item selection reuse the saved calibration. The offline Plotly
+player is embedded with its JavaScript included; it does not require a CDN.
+
+Run `python -m pytest test_mhrm_animation.py` for recorded-path integrity,
+endpoint, frame, export, bounded-payload, and interface-persistence checks.
+
 ### Prerequisites
 
 ```bash
