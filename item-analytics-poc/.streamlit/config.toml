@@ -1,0 +1,9 @@
+# Non-secret settings only.
+[server]
+maxUploadSize = 10
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+primaryColor = "#1f6f8b"

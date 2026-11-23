@@ -1,0 +1,3 @@
+Normalize semantically equivalent candidate features into a unique label *within the same conceptual category*, preserving the union of supporting item references. Never merge contradictory claims or distinct procedural sequences; instead create related-feature links. Ensure that identical source item IDs are counted once per canonical feature. Show uncertainty when the merge is contestable.
+
+Implementation note: the application performs a deterministic canonicalization pass (exact normalized-label matching within a feature type, and for procedures also matching dominance). Semantic merges beyond that are left to the SME's merge tool so that every merge is reviewed and audited.
