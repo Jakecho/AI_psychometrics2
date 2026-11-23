@@ -159,3 +159,65 @@ Not yet built from [MASTER_PROMPT.md](MASTER_PROMPT.md): hands-free or streaming
 No hosting, publication, Git commit, or upload is performed by the launcher.
 
 The deployment entry point uses a space-free path because Community Cloud dependency installation does not quote requirement paths containing spaces. The working app remains in `item dev`; the wrapper loads its hosted entry point.
+
+## Family Medicine decision workflow
+
+Open **Cognitive model → Family Medicine decision workflow** for the selected item. Set the decision, clinical setting, population, intended examinees, assessment intent, and any proposed key. Link decision features to fact IDs in **Shared facts and disclosure**. Keep the values that define the clinical scenario separate from which observations the learner has seen.
+
+1. Enter approved bank summaries and clinical passages with their source class, date or version, and locator. Use the `providers` list to grant OpenAI or Anthropic access to each record. A record without a provider stays available for local review. Scope a record to an item, stage, population, or setting as appropriate.
+2. Review the clinical claims and decision model. Use the local scenario table to inspect the derived key, feasibility, missing information, and triggered rules. Confirm the selected scenario and action key before drafting. A fact or disclosure edit refreshes the local evaluation and the review status.
+3. Review the wording and options for that scenario. The option pool shows why each alternative is attractive, the rule it fails, and any shortfall. Link manually authored modeled options to their actions and record the approved option IDs after assembly.
+4. Record a blinded solve before comparing it with the approved key. Run cueing separately for unfolding sequences or record a human cueing decision. Record the human clinical decision and resolve material disagreements before pilot or release.
+5. Review rationale proposals and retain the full JSON or author Markdown with the scenario, sources, option IDs, and revision history. A linked variant includes the source case, item, and scenario IDs.
+
+The optional **Family Medicine specialists** panel shows the effective route and the projected request. Each button invocation sends one request. The versioned registry and its implementation specification are in [item dev 2](../item%20dev%202/). Each run records the registry version. After editing the registry's prompts, schemas, routing or request projection, bump its `version` and record the new fingerprint in `test_registry_version.py`. General AI assistance and recorded transcription retain their own settings.
+
+| Local environment or hosted Streamlit Secrets | Purpose |
+| --- | --- |
+| `OPENAI_API_KEY` and `ITEMDEV_OPENAI_MODEL` | Default credential and model for OpenAI Responses |
+| `ANTHROPIC_API_KEY` and `ITEMDEV_ANTHROPIC_MODEL` | Default credential and model for Anthropic Messages |
+| `ITEMDEV_AGENT_ROUTES` | Optional JSON mapping of role IDs to a provider and optional model override |
+
+For example, `{"rationale_writing":{"provider":"anthropic"}}` uses the Anthropic model setting for that role. Deployments need approved model IDs and server-side credentials for the roles they intend to use. Limit authoring access to trusted writers and reviewers through the hosting environment. The app records the entered reviewer identity and decision at the content revision.
+
+### Feature space and distractor space
+
+After accepting a decision model, choose **Scenario to review**. **Feature space** shows the permitted values, linked facts, disclosure stage, rules and sources for each feature. Inspect coupled features or try a change in a visible variable to see the evaluated key before saving. **Distractor space** uses the same scenario. It shows nearby scenarios where each action is keyed, its exclusion rules, and the number of distinct eligible options. A reviewer can retain a candidate, select it for assembly, or revise its judgment. Confirming a changed scenario or editing a fact prompts reassessment of prior judgments.
+
+### Search an approved collection
+
+In **Search bank and clinical references**, load a structured bank as a JSON array. For clinical references, choose an approved Markdown folder locally or upload Markdown or JSON files. The local connector reads the selected folder recursively. It skips hidden entries and symbolic links and leaves the original files untouched. Uploaded files and the search index stay in the session. Only the excerpts selected by a named writer are saved with the item and stage.
+
+A minimal synthetic bank import looks like this.
+
+```json
+[{
+  "source_id": "demo-1", "source_class": "bank", "version": "2",
+  "locator": "Demo bank / item 1", "summary": "Select a next action once a report is available.",
+  "decision_timing": "Report review", "option_type": "Management",
+  "blueprint": {"domain": "Synthetic exercise"}, "options": [{"text": "Action A"}],
+  "providers": []
+}]
+```
+
+Markdown headings identify the section for each passage. Add properties at the top of the note when you know the original source, date or version, and applicable scope.
+
+```markdown
+---
+source_class: evidence summary
+version: Fixture v1
+citation: Synthetic report, section 2
+decision_timing: Report review
+providers: []
+---
+# When the report arrives
+The synthetic exercise distinguishes a final result from a pending report.
+```
+
+Use `approved: false` to exclude a record or note. Explicit record-level provider lists narrow the collection grant. A Markdown note without a provider property inherits the grant set by the writer when loading it. A structured JSON record without a provider list stays local. Both formats default to local-only when the collection has no provider grant. Replacing a collection rechecks saved permissions. Writers can narrow a saved grant or remove a passage from the item.
+
+Search runs locally using concept synonyms, TF-IDF similarity and, for larger collections, a low-rank representation of co-occurring terms. The query uses the item's objective, decision, reasoning demand, population, setting, and active disclosure. Exact terms can prioritize a named test or threshold. Each match shows its passage, locator, scope and reason for matching. A similarity score describes retrieval relevance. Observed option performance remains tied to its bank record, version, population and administration.
+
+Practice notes can suggest context. A retrieved guideline, study or evidence summary needs an original citation to enter clinical evidence review. The SME must mark the extracted claim applicable before linking it to a decision rule. The authoring views retain source references for reviewed features and candidates. The **Bank summaries and evidence passages** editor also accepts manual excerpts when a collection is unavailable.
+
+Run the Item Studio suite from the repository root with `.venv/bin/python -m pytest -q 'item dev'`. The local and hosted entrypoints use synthetic fixtures and mock provider transports in the tests.

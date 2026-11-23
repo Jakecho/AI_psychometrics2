@@ -51,7 +51,7 @@ _preview(c, c["id"] + "::")
         case = app.session_state["case"]
         first = case["items"][0]
         key = next(o["id"] for o in first["options"] if o["correct"])
-        app.radio[0].set_value(key).run()
+        app.radio[0].set_value(key)
         next(b for b in app.button if b.label == "Submit response").click().run()
         self.assertIn("Preview score", self.visible(app))
         next(b for b in app.button if b.label == "Advance and lock this stage").click().run()

@@ -10,9 +10,11 @@ API: https://docs.ollama.com/api/chat.
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import lru_cache
 import io
 import json
 import os
+from pathlib import Path
 import re
 import socket
 import urllib.error
@@ -21,6 +23,9 @@ import urllib.request
 import uuid
 import wave
 from typing import Any
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 
 class AdapterError(ValueError):
@@ -98,6 +103,11 @@ def _configuration() -> dict[str, Any]:
         "base_url": _url(base),
         "model": os.environ.get("ITEMDEV_AI_MODEL", "").strip(),
         "api_key": os.environ.get("ITEMDEV_AI_API_KEY", ""),
+    }
+
+
+def _voice_configuration():
+    return {
         "transcribe_url": _url(os.environ.get("ITEMDEV_TRANSCRIBE_URL", "").strip()),
         "transcribe_model": os.environ.get("ITEMDEV_TRANSCRIBE_MODEL", "").strip(),
         "transcribe_api_key": os.environ.get("ITEMDEV_TRANSCRIBE_API_KEY", ""),
@@ -110,31 +120,29 @@ def get_config() -> dict[str, Any]:
     ``configured`` means required settings exist, not that a provider connection
     has succeeded. ``voice_configured`` is independent of chat configuration.
     """
+    error = ""
     try:
         config = _configuration()
     except AdapterError as exc:
-        return {
-            "provider": "unavailable", "base_url": "", "model": "",
-            "configured": False, "voice_configured": False,
-            "transcribe_url": "", "transcribe_model": "", "error": str(exc),
-            "api_key_configured": False, "transcribe_api_key_configured": False,
-        }
+        error = str(exc)
+        config = {"provider": "unavailable", "base_url": "", "model": "", "api_key": ""}
+    try:
+        voice = _voice_configuration()
+    except AdapterError:
+        voice = {"transcribe_url": "", "transcribe_model": "", "transcribe_api_key": ""}
+    defined_provider = config["provider"] in {"ollama", "compatible"}
+    if not error and not defined_provider:
+        error = "Choose the ollama or compatible AI provider in the server environment."
     return {
-        key: config[key] for key in (
-            "provider", "base_url", "model", "transcribe_url", "transcribe_model"
-        )
-    } | {
-        "configured": bool(
-            config["provider"] in {"ollama", "compatible"}
-            and config["base_url"] and config["model"]
-        ),
-        "voice_configured": bool(config["transcribe_url"] and config["transcribe_model"]),
+        "provider": config["provider"], "base_url": config["base_url"], "model": config["model"],
+        "transcribe_url": voice["transcribe_url"], "transcribe_model": voice["transcribe_model"],
+        "configured": bool(defined_provider and config["base_url"] and config["model"]),
+        "voice_configured": bool(voice["transcribe_url"] and voice["transcribe_model"]),
         "api_key_configured": bool(config["api_key"]),
-        "transcribe_api_key_configured": bool(config["transcribe_api_key"]),
-        "error": "" if config["provider"] in {"ollama", "compatible"} else (
-            "Choose the ollama or compatible AI provider in the server environment."
-        ),
+        "transcribe_api_key_configured": bool(voice["transcribe_api_key"]),
+        "error": error,
     }
+
 
 
 def _require_enabled(enabled: bool) -> None:
@@ -185,6 +193,12 @@ def _decode_json(payload: bytes) -> Any:
         raise AdapterError("The provider returned an unreadable response. No changes were applied.") from None
 
 
+def _general_item_context(item):
+    clean = {k: v for k, v in item.items() if k != "decision_workflow"}
+    clean["options"] = [{k: v for k, v in o.items() if k != "specialist_judgment"} for o in item.get("options", [])]
+    return clean
+
+
 def _case_context(case: dict[str, Any]) -> str:
     if not isinstance(case, dict):
         raise AdapterError("Select a case before requesting AI assistance.")
@@ -195,7 +209,10 @@ def _case_context(case: dict[str, Any]) -> str:
         "features", "constraints", "sources",
     )
     try:
-        content = json.dumps({key: case[key] for key in keys if key in case}, ensure_ascii=False, allow_nan=False)
+        data = {key: case[key] for key in keys if key in case}
+        if "items" in data:
+            data["items"] = [_general_item_context(item) for item in data["items"]]
+        content = json.dumps(data, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError):
         raise AdapterError("The selected case contains unsupported data. Export or repair it before requesting assistance.") from None
     if len(content.encode("utf-8")) > MAX_CONTEXT_BYTES:
@@ -405,7 +422,7 @@ def propose_item(
          "Provide rationales for all options. Do not add sources, approvals, commands, or fields outside this schema. "
          "Use actual booleans. Preserve response format unless the writer requests a change. Schema: " + json.dumps(schema)},
         {"role": "user", "content": "Authored case data (reference only):\n" + _case_context(case)},
-        {"role": "user", "content": "Target item data (reference only):\n" + json.dumps(item, ensure_ascii=False)},
+        {"role": "user", "content": "Target item data (reference only):\n" + json.dumps(_general_item_context(item), ensure_ascii=False)},
         {"role": "user", "content": "Writer revision request:\n" + user_message.strip()},
     ], enabled, json_output=True)
     if text.startswith("```"):
@@ -427,7 +444,7 @@ def transcribe_audio(audio_bytes: bytes, enabled: bool) -> str:
     a JSON object with ``text`` or a plain-text transcript.
     """
     _require_enabled(enabled)
-    config = _configuration()
+    config = _voice_configuration()
     if not config["transcribe_url"] or not config["transcribe_model"]:
         raise AdapterError("Voice transcription is not configured. Continue with text or manual editing.")
     if not isinstance(audio_bytes, bytes) or not audio_bytes:
@@ -512,3 +529,197 @@ def parse_command(text: str) -> dict[str, Any] | None:
         if 1 <= count <= 100:
             return {"action": "resize_items", "count": count}
     return None
+
+
+REGISTRY_PATH = Path(__file__).resolve().parents[1] / "item dev 2" / "Family_Medicine_ItemDev_Agent_Prompts.json"
+SPECIALIST_MAX_TOKENS = 8192
+
+
+@lru_cache(maxsize=1)
+def specialist_registry():
+    try:
+        registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+        Draft202012Validator.check_schema(registry["request_schema"])
+        for agent in registry["agents"]:
+            Draft202012Validator.check_schema(agent["response_schema"])
+        return registry
+    except (OSError, ValueError, KeyError, SchemaError):
+        raise AdapterError("The specialist prompt registry could not be loaded.") from None
+
+
+def specialist_definition(role):
+    agent = next((a for a in specialist_registry()["agents"] if a["role_id"] == role), None)
+    if agent is None:
+        raise AdapterError("Choose a specialist defined in the prompt registry.")
+    return agent
+
+
+def specialist_config(role):
+    """Resolve one route without exposing credentials or probing a service."""
+    registry = specialist_registry()
+    agent = specialist_definition(role)
+    provider = agent["default_provider"]
+    model = ""
+    reason = ""
+    try:
+        settings = json.loads(os.environ.get(registry["routing"]["overrides_env"], "") or "{}")
+        if not isinstance(settings, dict):
+            raise ValueError
+        if role in settings:
+            override = settings[role]
+            schema = registry["routing"]["overrides_schema"]["additionalProperties"]
+            if not Draft202012Validator(schema).is_valid(override):
+                raise ValueError
+            provider, model = override["provider"], override.get("model", "").strip()
+    except ValueError:
+        reason = "The route override is invalid. Check ITEMDEV_AGENT_ROUTES."
+    provider_def = registry["providers"][provider]
+    model = model or os.environ.get(provider_def["default_model_env"], "").strip()
+    if model and any(model == os.environ.get(p["credential_env"], "").strip() for p in registry["providers"].values()):
+        reason = "The configured model identifier is invalid."
+        model = ""
+    if not reason and not os.environ.get(provider_def["credential_env"], "").strip():
+        reason = f"Set {provider_def['credential_env']} on the server."
+    if not reason and not model:
+        reason = f"Set {provider_def['default_model_env']} or a route model."
+    if not reason and not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.:/-]{0,199}", model):
+        reason = "The configured model identifier is invalid."
+        model = ""
+    return {"provider": provider, "name": provider_def["display_name"], "model": model,
+            "configured": not reason, "reason": reason}
+
+
+def _project_fields(values, fields):
+    return {key: values[key] for key in fields if key in values}
+
+
+def project_specialist_request(role, request):
+    """Apply the active input profile, including the nested blinded views."""
+    agent = specialist_definition(role)
+    role_input = request["role_input"]
+    profile = agent["input_profiles"].get(role_input.get("pass_type", "default"))
+    if profile is None:
+        raise AdapterError("Choose a valid specialist review pass.")
+    output = {k: deepcopy(request[k]) for k in ("request_id", "target")}
+    fields = profile.get("task_fields", specialist_registry()["request_projection"]["task_fields"])
+    output["task"] = _project_fields(request["task"], fields)
+    for field, name in (("accepted_fields", "accepted_fields"), ("role_input", "role_input")):
+        required, optional = (profile[f"{kind}_{name}"] for kind in ("required", "optional"))
+        if not set(required) <= request[field].keys():
+            raise AdapterError("The specialist handoff is missing required inputs.")
+        output[field] = _project_fields(request[field], required + optional)
+    output["visible_facts"] = request["visible_facts"]
+    if "visible_fact_fields" in profile:
+        output["visible_facts"] = (
+            [_project_fields(row, profile["visible_fact_fields"]) for row in request["visible_facts"]]
+            if profile["visible_fact_fields"] else []
+        )
+    projected_input = output["role_input"]
+    for key, allowed in (("options", "option_fields"), ("source_excerpts", "source_excerpt_fields"),
+                         ("visible_disclosures", "disclosure_fields")):
+        if key in projected_input and allowed in profile:
+            projected_input[key] = [_project_fields(row, profile[allowed]) for row in projected_input[key]]
+    if "stage_views" in projected_input:
+        stages = []
+        for row in projected_input["stage_views"]:
+            stage = _project_fields(row, profile["stage_view_fields"])
+            stage["facts"] = [_project_fields(f, profile["stage_fact_fields"]) for f in stage["facts"]]
+            stage["items"] = [
+                _project_fields(i, profile["stage_item_fields"]) | {
+                    "options": [_project_fields(o, profile["option_fields"]) for o in i["options"]],
+                } for i in stage["items"]
+            ]
+            stages.append(stage)
+        projected_input["stage_views"] = stages
+        projected_input["delivery_policy"] = _project_fields(projected_input["delivery_policy"], profile["delivery_policy_fields"])
+    if not Draft202012Validator(specialist_registry()["request_schema"]).is_valid(output):
+        raise AdapterError("The specialist request does not match the current registry.")
+    return output
+
+
+def _single_json(text):
+    def unique(pairs):
+        value = dict(pairs)
+        if len(value) != len(pairs):
+            raise ValueError
+        return value
+    def invalid_constant(_):
+        raise ValueError
+    return json.loads(text, object_pairs_hook=unique, parse_constant=invalid_constant)
+
+
+def _specialist_text(response, provider):
+    if provider == "openai":
+        if response["status"] != "completed" or response.get("incomplete_details"):
+            raise ValueError
+        messages = [o for o in response["output"] if o["type"] == "message"]
+        if any(m.get("status") != "completed" or m.get("role") != "assistant" for m in messages):
+            raise ValueError
+        blocks = [b for m in messages for b in m["content"]]
+        text_kind = "output_text"
+    else:
+        if response["stop_reason"] != "end_turn":
+            raise ValueError
+        blocks = response["content"]
+        text_kind = "text"
+    if not blocks or any(b["type"] not in {text_kind, "thinking", "redacted_thinking"} for b in blocks):
+        raise ValueError
+    return "".join(b["text"] for b in blocks if b["type"] == text_kind)
+
+
+def dispatch_specialist(role, request, enabled, *, approved_route):
+    """Send exactly one bounded, stateless request on the writer-confirmed route."""
+    _require_enabled(enabled)
+    route = specialist_config(role)
+    if not route["configured"]:
+        raise AdapterError(route["reason"])
+    if (route["provider"], route["model"]) != tuple(approved_route):
+        raise AdapterError("The provider route changed. Review its configuration and invoke the specialist again.")
+    request = project_specialist_request(role, request)
+    agent = specialist_definition(role)
+    schema = agent["response_schema"]
+    system = agent["system_prompt"] + "\n\nCanonical output schema:\n" + json.dumps(schema, separators=(",", ":"))
+    try:
+        data = json.dumps(request, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    except (ValueError, TypeError, RecursionError):
+        raise AdapterError("The specialist input contains unsupported data.") from None
+    if len(data.encode("utf-8")) > MAX_CONTEXT_BYTES:
+        raise AdapterError("The specialist input is too large. Select fewer excerpts or a smaller case.")
+    provider = route["provider"]
+    provider_def = specialist_registry()["providers"][provider]
+    credential = os.environ.get(provider_def["credential_env"], "").strip()
+    if not credential:
+        raise AdapterError("The specialist credential is unavailable.")
+    credentials = [os.environ.get(p["credential_env"], "").strip() for p in specialist_registry()["providers"].values()]
+    if any(key and key in data for key in credentials):
+        raise AdapterError("Remove credential material from the specialist input.")
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if provider == "openai":
+        endpoint = "https://api.openai.com/v1/responses"
+        headers["Authorization"] = "Bearer " + credential
+        body = {"model": route["model"], "instructions": system, "input": data,
+                "store": False, "max_output_tokens": SPECIALIST_MAX_TOKENS}
+    else:
+        endpoint = "https://api.anthropic.com/v1/messages"
+        headers.update({"x-api-key": credential, "anthropic-version": "2023-06-01"})
+        body = {"model": route["model"], "system": system, "max_tokens": SPECIALIST_MAX_TOKENS,
+                "messages": [{"role": "user", "content": data}]}
+    raw, _ = _http(urllib.request.Request(endpoint, json.dumps(body).encode("utf-8"), headers))
+    try:
+        response_text = _specialist_text(_decode_json(raw), provider)
+        if any(key and key in response_text for key in credentials):
+            raise ValueError
+        result = _single_json(response_text)
+        json.dumps(result, allow_nan=False)
+        if not Draft202012Validator(schema).is_valid(result):
+            raise ValueError
+    except (KeyError, AttributeError, IndexError, TypeError, ValueError, RecursionError):
+        raise AdapterError("The specialist returned a refusal, incomplete output, or invalid proposal. No changes were applied.") from None
+    if (result["request_id"] != request["request_id"] or result["base_revision"] != request["target"]["base_revision"]):
+        raise AdapterError("The specialist response does not match the dispatched revision.")
+    from specialist_workflow import validate_handoff
+    try:
+        validate_handoff(role, request, result)
+    except (KeyError, TypeError, ValueError, RecursionError):
+        raise AdapterError("The specialist proposal has inconsistent references or handoff data. No changes were applied.") from None
+    return result

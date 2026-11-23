@@ -33,6 +33,10 @@ h1,h2,h3 {font-family:'Manrope',sans-serif !important; letter-spacing:-.035em;}
 div[data-testid="stExpander"] {background:#fff;border:1px solid #e0e8df;border-radius:9px;}
 button[kind="primary"] {background:#26776e;border:0;}
 [data-testid="stCaptionContainer"] {color:#6f817a;}
+@media(max-width:1150px){
+  [class*="st-key-itemdev-workspace-"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] { flex-direction:column; }
+  [class*="st-key-itemdev-workspace-"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { width:100%; flex:1 1 auto; }
+}
 @media(max-width:850px){.hero-title{font-size:1.8rem}.block-container{padding-top:1rem}}
 </style>''', unsafe_allow_html=True)
 
@@ -40,14 +44,18 @@ button[kind="primary"] {background:#26776e;border:0;}
 reset_widgets = refresh_widgets
 
 
-def commit(case, reason='Edit draft'):
+def commit(case, reason='Edit draft', *, specialist=False):
     """Persist a case. A copy edited outside the form widgets replaces the open draft."""
     current = st.session_state['itemdev_cases'].get(case['id'])
-    saved = storage.save_case(case, reason)
+    audit_only = specialist and reason == 'Record specialist run'
+    if audit_only:
+        saved = storage.record_specialist_run(case['id'], case['specialist_runs'][-1])
+    else:
+        saved = storage.save_case(case, reason, expected_revision=case['version'] if specialist else None)
     case.clear()
     case.update(saved)
     st.session_state['itemdev_cases'][case['id']] = case
-    if current is not None and current is not case:
+    if current is not None and current is not case and (not audit_only or current['version'] != saved['version']):
         # A command, proposal or dictation changed the saved case: rebuild the
         # form from it so stale on-screen values cannot overwrite the change.
         refresh_widgets(case['id'])
@@ -105,7 +113,7 @@ with st.sidebar:
     ai_enabled = st.toggle('AI assistance', value=False, key='itemdev_ai_enabled', help='Optional. All manual authoring, guidance, and structural validation work with AI off.')
     if ai_enabled:
         config = get_config()
-        st.caption('Configured · connection not yet verified' if config['configured'] else 'Not configured · manual tools remain available')
+        st.caption('General assistant configured · connection not yet verified' if config['configured'] else 'General assistant unconfigured · specialist routes are configured separately')
     else:
         st.caption('Off · no AI-provider requests')
     st.divider()
@@ -248,12 +256,13 @@ def render_mode(mode):
         st.session_state['itemdev_notice'] = 'Draft archived. Restore it from the Library dashboard.'
         st.rerun()
     tools[4].caption(f"Revision {case.get('version', 1)} · {case.get('review_status', 'Draft')} · {len(case['items'])} items / {len(case['stages'])} stages")
-    editor_col, guide_col = st.columns([3.5, 1.25], gap='large')
-    with editor_col:
-        render_editor(case, commit, add_cases)
-    with guide_col:
-        render_assistant(case, ai_enabled, commit)
-    commit(case, 'Edit draft')
+    with st.container(key=f'itemdev-workspace-{mode}'):
+        editor_col, guide_col = st.columns([3.5, 1.25], gap='medium')
+        with editor_col:
+            render_editor(case, commit, add_cases)
+        commit(case, 'Edit draft')
+        with guide_col:
+            render_assistant(case, ai_enabled, commit)
     st.divider()
     exports = st.columns(3)
     exports[0].download_button('Export complete JSON', json.dumps(case, indent=2, ensure_ascii=False), file_name=f"{mode}-case.json", mime='application/json', key=f'json:{mode}', width="stretch")

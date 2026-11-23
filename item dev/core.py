@@ -182,7 +182,7 @@ def touch_case(case, reason="Content changed"):
     for item in case.get("items", []):
         item["review_status"] = "Draft"
     for review in case.get("reviews", []):
-        if review.get("decision") in {"Approved", "Approved for use", "Ready for pilot"} or review.get("status") in {"Approved", "Approved for use", "Ready for pilot"}:
+        if review.get("valid") or review.get("decision") in {"Approved", "Approved for use", "Ready for pilot"} or review.get("status") in {"Approved", "Approved for use", "Ready for pilot"}:
             review["requires_reassessment"] = True
             review["valid"] = False
             review["reassessment_reason"] = reason
@@ -278,6 +278,8 @@ def scoring_patterns(item):
             patterns.append(("One keyed option only", keyed[:1]))
         if unkeyed:
             patterns.append(("Keyed set plus one unkeyed option", keyed + unkeyed[:1]))
+            if len(keyed) > 1:
+                patterns.append(("One keyed and one unkeyed option", keyed[:1] + unkeyed[:1]))
             patterns.append(("One unkeyed option only", unkeyed[:1]))
         patterns.append(("All options selected", keyed + unkeyed))
     rows = []
@@ -285,7 +287,7 @@ def scoring_patterns(item):
         result = score_item(item, selected)
         rows.append({"Response pattern": label, "Keyed selected": result["correct_selected"],
                      "Unkeyed selected": result["incorrect_selected"], "Keyed missed": result["missed"],
-                     "Score": result["score"]})
+                     "Meets selection instructions": selection_count_met(item, len(selected)), "Score": result["score"]})
     return rows
 
 
@@ -411,6 +413,11 @@ def _issue(severity, code, path, message):
     return {"severity": severity, "code": code, "path": path, "message": message}
 
 
+def selection_count_met(item, response_count):
+    required = 1 if item["format"] == "SBA" else item.get("select_count")
+    return required is None or response_count == required
+
+
 def validate_case(case):
     """Return explainable structural findings and separate SME review prompts."""
     try:
@@ -484,7 +491,9 @@ def validate_case(case):
             if option.get("conditions"):
                 known = {f.get("id") for f in case["features"]} | {f.get("name") for f in case["features"]}
                 for name in _rule_features(option["conditions"]):
-                    if name not in known and name != "scenario":
+                    if name not in known and name != "scenario" and name not in {
+                        f["feature_id"] for f in item.get("decision_workflow", {}).get("model", {}).get("payload", {}).get("features", [])
+                    }:
                         add("error", "CONDITION_FEATURE", opath + ".conditions", f"Eligibility references unknown feature {name!r}.")
         visible_ids = {f["id"] for f in visible_facts(case, item["stage_id"])}
         for fact_id in item.get("required_facts", []):
@@ -517,6 +526,12 @@ def validate_case(case):
         add("review", "EXPERT_REVIEW", "reviews", "Complete model and item review. No clinical or psychometric approval is inferred from these checks.")
     if case["mode"] == "unfolding":
         add("review", "SEQUENCE_REVIEW", "stages", "Review chronology, treatment exposure, answer cueing, and whether the learner should update judgments. These require SME judgment.")
+    if case.get("specialist_runs") or any(i.get("decision_workflow") for i in case["items"]):
+        from specialist_workflow import review_findings
+        for idx, item in enumerate(case["items"]):
+            if item["stage_id"] in stage_ids:
+                for reason in review_findings(case, item):
+                    add("review", "DECISION_WORKFLOW", f"items[{idx}].decision_workflow", reason)
     return findings
 
 
@@ -560,6 +575,17 @@ def _cross_item_findings(case, add):
             visible = _norm_text(other["stem"] + " " + other["lead_in"])
             if any(key in visible for key in keys):
                 add("review", "ANSWER_CUE", f"items[{bidx}].stem", f"Item {bidx + 1} wording contains the keyed answer to item {aidx + 1}. Confirm this disclosure is deliberate and cannot be seen before item {aidx + 1} is answered.")
+        if case["mode"] == "unfolding":
+            start = order[source["stage_id"]]
+            for stage_index in range(start, len(case["stages"])):
+                stage = case["stages"][stage_index]
+                incoming = case["stages"][stage_index - 1]["transition"] if stage_index else ""
+                disclosure = _norm_text(f"{stage['title']} {incoming} {stage['new_information']}")
+                if any(key in disclosure for key in keys):
+                    if stage_index == start:
+                        add("review", "DISCLOSURE_CUE", f"stages[{stage_index}]", "The displayed disclosure repeats a key while its item can still be answered or revised.")
+                    else:
+                        add("review", "AFTER_LOCK_DISCLOSURE", f"stages[{stage_index}]", "This disclosure repeats a key after the earlier response locks. Confirm that it deliberately establishes context for a different decision.")
     names = {f.get("name") for f in case["features"]}
     def scan(path, text):
         for name in sorted(set(_PLACEHOLDER.findall(text or ""))):
@@ -687,10 +713,19 @@ def normalize_import(payload):
             _ensure(feature["disclosed_at"], str, f"case.features[{idx}].disclosed_at")
     for idx, rule in enumerate(result["constraints"]):
         _validate_rule_shape(rule, f"case.constraints[{idx}]")
+    if "empirical_records" in result:
+        _ensure(result["empirical_records"], list, "case.empirical_records")
+        for idx, record in enumerate(result["empirical_records"]):
+            _ensure(record, dict, f"case.empirical_records[{idx}]")
     for idx, source in enumerate(result["sources"]):
         for key in ("title", "url", "note"):
             if key in source:
                 _ensure(source[key], str, f"case.sources[{idx}].{key}")
+    if "specialist_sources" in result or "specialist_runs" in result or any(
+        "decision_workflow" in item for item in result["items"] + result["archived_items"]
+    ):
+        from specialist_workflow import validate_workflow_import
+        validate_workflow_import(result)
     return result
 
 
@@ -757,14 +792,53 @@ def evaluate_rule(rule, assignment):
         return feature not in assignment
     if feature not in assignment:
         return False
-    left = assignment[feature]
+    return _compare_rule_values(assignment[feature], op, right)
+
+
+def _compare_rule_values(left, op, right, invalid=False):
     try:
         return {"equals": lambda: left == right, "not_equals": lambda: left != right,
                 "in": lambda: left in right, "not_in": lambda: left not in right,
                 "gt": lambda: left > right, "gte": lambda: left >= right,
                 "lt": lambda: left < right, "lte": lambda: left <= right}[op]()
     except (TypeError, ValueError, KeyError):
-        return False
+        return invalid
+
+
+def evaluate_decision_rule(rule, assignment):
+    """Use the generation predicate syntax with clinical true/false/unknown semantics."""
+    if isinstance(rule, list):
+        values = [evaluate_decision_rule(part, assignment) for part in rule]
+        return False if False in values else None if None in values else True
+    if not rule:
+        return True
+    if rule.get("scenario") and rule["scenario"] != assignment.get("scenario"):
+        return True
+    if "all" in rule:
+        return evaluate_decision_rule(rule["all"], assignment)
+    if "any" in rule:
+        values = [evaluate_decision_rule(part, assignment) for part in rule["any"]]
+        return True if True in values else None if None in values else False
+    if "not" in rule:
+        result = evaluate_decision_rule(rule["not"], assignment)
+        return None if result is None else not result
+    feature = rule["feature"]
+    if feature not in assignment or assignment[feature] is None:
+        return None
+    operator = rule.get("operator", "equals")
+    if operator in {"exists", "not_exists"}:
+        return operator == "exists"
+    left, right = assignment[feature], rule.get("value")
+    if operator in {"gt", "gte", "lt", "lte"} and (
+        type(left) not in (int, float) or type(right) not in (int, float)
+    ):
+        return None
+    if operator in {"equals", "not_equals"} and isinstance(left, bool) != isinstance(right, bool):
+        return operator == "not_equals"
+    if operator in {"in", "not_in"}:
+        matching = any(value == left and isinstance(value, bool) == isinstance(left, bool) for value in right)
+        return matching if operator == "in" else not matching
+    return _compare_rule_values(left, operator, right, invalid=None)
 
 
 def _render(value, assignment):
@@ -888,9 +962,11 @@ def export_markdown(case, include_answers=True):
     if include_answers:
         bp = case["blueprint"]
         lines += [f"Blueprint: {bp.get('domain', '')} → {bp.get('subdomain', '')}", f"Objective: {bp.get('objective', '')}",
-                  f"Case version: {case['version']} · Review state: {case['review_status']}", ""]
+                  f"Case ID: {case['id']} · Version: {case['version']} · Review state: {case['review_status']}", ""]
     for stage_idx, stage in enumerate(case["stages"]):
         lines += [f"## {stage['title']}", "", stage.get("new_information", ""), ""]
+        if include_answers:
+            lines += [f"Stage ID: {stage['id']}", ""]
         for item in [i for i in case["items"] if i["stage_id"] == stage["id"]]:
             lines += [f"### {item['title']}", "", item["stem"], ""]
             if case["mode"] == "appraisal":
@@ -902,15 +978,24 @@ def export_markdown(case, include_answers=True):
             lines.append("")
             if include_answers:
                 keys = [str(idx + 1) for idx, opt in enumerate(item["options"]) if opt["correct"]]
-                lines += [f"Keyed option(s): {', '.join(keys)}", f"Reasoning phase: {item['phase']}", f"Scoring: {SCORING_DESCRIPTIONS[item.get('scoring', 'exact')]}", ""]
+                lines += [f"Item ID: {item['id']}", f"Keyed option(s): {', '.join(keys)}", f"Reasoning phase: {item['phase']}", f"Scoring: {SCORING_DESCRIPTIONS[item.get('scoring', 'exact')]}", ""]
                 for idx, option in enumerate(item["options"]):
-                    lines += [f"- Option {idx + 1}: {option['rationale']} · Proposed misconception: {option.get('misconception') or 'not specified'}"]
+                    lines += [f"- Option {idx + 1} ({option['id']}): {option['rationale']} · Proposed misconception: {option.get('misconception') or 'not specified'}"]
                 if case["mode"] == "appraisal":
                     lines += ["", f"Appraisal dimension: {item['dimension']}", "", "Claim review:", "", "```json", json.dumps(item["claims"], indent=2, ensure_ascii=False), "```", "", "Recommendation rubric ratings:", "", "```json", json.dumps(item["ratings"], indent=2, ensure_ascii=False), "```"]
                 lines.append("")
         if stage.get("transition"):
             lines += [stage["transition"], ""]
     if include_answers:
+        for heading, value in (
+            ("Variant provenance", case.get("generated_from")),
+            ("Specialist source provenance", case.get("specialist_sources")),
+            ("Specialist proposals and review passes", case.get("specialist_runs")),
+            ("SME decision models and acceptances", {i["id"]: i["decision_workflow"] for i in case["items"] if i.get("decision_workflow")}),
+            ("Empirical records", case.get("empirical_records")),
+        ):
+            if value:
+                lines += ["", f"## {heading}", "", "```json", json.dumps(value, indent=2, ensure_ascii=False), "```", ""]
         lines += ["## Sources", ""]
         for source in case["sources"]:
             lines += [f"- [{source.get('title') or source.get('url') or 'Source'}]({source.get('url', '')}) — {source.get('note', '')}"]

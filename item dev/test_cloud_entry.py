@@ -29,6 +29,11 @@ class CloudEntrypointTests(unittest.TestCase):
     def test_only_allowlisted_scalar_strings_are_mapped(self):
         environ = {}
         secrets = {
+            "OPENAI_API_KEY": "test-openai",
+            "ANTHROPIC_API_KEY": "test-anthropic",
+            "ITEMDEV_OPENAI_MODEL": "test-gpt",
+            "ITEMDEV_ANTHROPIC_MODEL": "test-claude",
+            "ITEMDEV_AGENT_ROUTES": "{}",
             "ITEMDEV_AI_PROVIDER": "compatible",
             "ITEMDEV_AI_BASE_URL": "https://ai.example.test/v1",
             "ITEMDEV_AI_MODEL": "configured-model",

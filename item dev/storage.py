@@ -96,19 +96,39 @@ def load_library():
 
 
 def _content(case):
-    ignored = {'version', 'updated_at', 'review_status', 'reviews', 'last_change'}
+    ignored = {'version', 'updated_at', 'review_status', 'reviews', 'last_change', 'specialist_runs'}
     value = {k: deepcopy(v) for k, v in case.items() if k not in ignored}
     for item in value.get('items', []):
         item.pop('review_status', None)
     return value
 
 
-def save_case(case, reason='Edit draft'):
+def verify_specialist_revision(case_id, version):
+    """Check the saved permissions and content are still at the inspected revision."""
+    with _lock():
+        current = _read()['cases'].get(case_id)
+        if not current or current['version'] != version:
+            raise ValueError("The saved draft or its source permissions changed. Reopen the case and inspect the new request.")
+
+
+def save_case(case, reason='Edit draft', *, expected_revision=None):
     """Save a document, preserving reviews only when clinical content is unchanged."""
     with _lock():
         library = _read()
         saved = deepcopy(case)
         previous = library['cases'].get(saved['id'])
+        if expected_revision is not None and (previous is None or previous['version'] != expected_revision):
+            raise ValueError("The saved draft advanced to a newer revision. Reopen it before accepting changes.")
+        if (previous and saved.get('version') != previous['version']
+                and previous.get('retrieval_permissions') != saved.get('retrieval_permissions')):
+            raise ValueError("Source permissions changed in another revision. Reopen this case before saving.")
+        if expected_revision is not None:
+            saved['reviews'] = deepcopy(previous.get('reviews', []))
+            saved['review_status'] = previous['review_status']
+            if 'empirical_records' in previous:
+                saved['empirical_records'] = deepcopy(previous['empirical_records'])
+        if previous is not None and 'specialist_runs' in previous:
+            saved['specialist_runs'] = deepcopy(previous['specialist_runs'])
         if previous == saved:
             return deepcopy(previous)
         content_changed = previous is not None and _content(previous) != _content(saved)
@@ -119,6 +139,9 @@ def save_case(case, reason='Edit draft'):
         if content_changed:
             saved['version'] = previous.get('version', 1)
             core.touch_case(saved, reason)
+            if any(i.get('decision_workflow') for i in saved['items']):
+                from specialist_workflow import mark_reassessment
+                mark_reassessment(previous, saved, reason)
         elif previous:
             saved['version'] = previous.get('version', 1)
         saved['updated_at'] = core.timestamp()
@@ -129,6 +152,20 @@ def save_case(case, reason='Edit draft'):
         library['events'][saved['id']] = library['events'][saved['id']][-100:]
         _write(library)
         return deepcopy(saved)
+
+
+def record_specialist_run(case_id, run):
+    """Append a result to its original draft without changing content or undo history."""
+    with _lock():
+        library = _read()
+        current = library['cases'].get(case_id) or library.get('archived_cases', {}).get(case_id)
+        if current is None:
+            raise ValueError("The source draft is unavailable.")
+        history = current.setdefault('specialist_runs', [])
+        if not any(entry['request_id'] == run['request_id'] for entry in history):
+            history.append(deepcopy(run))
+            _write(library)
+        return deepcopy(current)
 
 
 def recover(case_id, direction='undo'):
@@ -143,6 +180,25 @@ def recover(case_id, direction='undo'):
         library[target].setdefault(case_id, []).append(deepcopy(current))
         restored = stack.pop()
         restored['version'] = current.get('version', 1)
+        # Undo restores authored snapshots under the most recent source-sharing approvals.
+        if 'retrieval_permissions' in current:
+            from specialist_workflow import permitted_retrieval_providers
+            permissions = deepcopy(current['retrieval_permissions'])
+            restored['retrieval_permissions'] = permissions
+            for item in restored['items'] + restored.get('archived_items', []):
+                by_source = permissions.get(item['id'], {})
+                for row in item.get('decision_workflow', {}).get('retrieved_sources', []):
+                    row['providers'] = permitted_retrieval_providers(row, by_source.get(row['source_id']))
+        if 'specialist_runs' in current:
+            restored['specialist_runs'] = deepcopy(current['specialist_runs'])
+        if 'specialist_runs' in current or any(i.get('decision_workflow') for i in restored['items'] + current['items']):
+            restored['specialist_epoch'] = core.uid('epoch')
+        present = {r.get('id') for r in restored.get('reviews', [])}
+        for record in current.get('reviews', []):
+            if record.get('id') not in present:
+                restored.setdefault('reviews', []).append(deepcopy(record) | {'valid': False, 'requires_reassessment': True})
+        if 'empirical_records' in current:
+            restored['empirical_records'] = deepcopy(current['empirical_records'])
         core.touch_case(restored, f'{direction.title()} revision')
         library['cases'][case_id] = restored
         library['events'].setdefault(case_id, []).append({
@@ -200,6 +256,9 @@ def restore_case(case_id):
         case = library.get('archived_cases', {}).pop(case_id, None)
         if case is None:
             return None
+        if 'specialist_runs' in case or any(i.get('decision_workflow') for i in case['items']):
+            case['specialist_epoch'] = core.uid('epoch')
+            core.touch_case(case, 'Restore archived revision')
         library['cases'][case_id] = case
         library['events'].setdefault(case_id, []).append({
             'time': core.timestamp(), 'reason': 'Restore archived draft', 'version': case.get('version', 1),
@@ -211,12 +270,17 @@ def restore_case(case_id):
 def import_case(payload, suffix=' · imported'):
     imported = core.normalize_import(payload)
     # Imported approvals are retained only as provenance, never activated locally.
+    original_id = imported['id']
     imported['id'] = core.uid('case')
     imported['title'] += suffix
     imported['review_status'] = 'Draft'
     for record in imported.get('reviews', []):
         record['imported'] = True
         record['valid'] = False
+        record['requires_reassessment'] = True
+    for record in imported.get('empirical_records', []):
+        record.setdefault('source_case_id', original_id)
+        record['imported'] = True
     for item in imported.get('items', []):
         item['review_status'] = 'Draft'
     return save_case(imported, 'Import draft as new case')

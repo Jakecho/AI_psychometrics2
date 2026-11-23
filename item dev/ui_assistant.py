@@ -16,6 +16,7 @@ from ai_adapter import (
     request_assistance,
     transcribe_audio,
 )
+from ui_decision_workflow import render_specialists
 from core import (
     APPRAISAL_GUIDANCE,
     MISCONCEPTIONS,
@@ -144,6 +145,8 @@ def render_assistant(case: dict, enabled: bool, commit: Callable) -> None:
             except (ValueError, KeyError, TypeError) as exc:
                 st.error(f"The local command could not be applied: {exc}")
         st.caption("Supported: add item, add stage, create N items, change this item to SBA/MS, validate, preview, undo, redo, open a mode.")
+
+    render_specialists(case, item, enabled, commit)
 
     if not enabled:
         st.session_state[prefix + "request_token"] = uuid4().hex
